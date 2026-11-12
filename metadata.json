@@ -1,0 +1,11 @@
+{
+  "name": "AI-Powered Interview & Recruitment Platform (MERN, Python, NLP, LLM & WebRTC)",
+  "description": "B.Tech CSE Final Year Project: AI-Powered Interview & Recruitment Platform automating recruitment with MERN stack, Python AI services, NLP resume parsing, LLM question generation, and WebRTC real-time video interviews.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
