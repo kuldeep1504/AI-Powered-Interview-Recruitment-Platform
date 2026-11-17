@@ -150,6 +150,29 @@ export default function App() {
     restoreSession();
   }, []);
 
+  // Keep recruiter pipeline & scheduled interviews synced with latest candidate profile updates when switching tabs
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'recruiter') return;
+    if (activeTab !== 'recruiter-dashboard' && activeTab !== 'recruiter-interviews') return;
+
+    const token = getAuthToken();
+    const requestInit: RequestInit | undefined = token
+      ? { headers: { Authorization: `Bearer ${token}` } }
+      : undefined;
+
+    Promise.all([
+      fetch('/api/applications', requestInit).then((r) => (r.ok ? r.json() : null)),
+      fetch('/api/interviews', requestInit).then((r) => (r.ok ? r.json() : null)),
+    ])
+      .then(([appsData, intData]) => {
+        if (appsData?.applications) setApplications(appsData.applications);
+        if (intData?.interviews) setInterviews(intData.interviews);
+      })
+      .catch((err) => {
+        console.error('Failed to refresh recruiter workspace data:', err);
+      });
+  }, [currentUser?.id, currentUser?.role, activeTab]);
+
   // Handle switching user role (Candidate, Recruiter, Admin) using real backend login
   const handleSwitchRole = async (role: UserRole) => {
     if (!currentUser) return;
@@ -255,14 +278,18 @@ export default function App() {
     notes?: string
   ) => {
     try {
+      const token = getAuthToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
       const res = await fetch(`/api/applications/${appId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ status, recruiterNotes: notes }),
       });
       if (res.ok) {
         const data = await res.json();
-        setApplications(applications.map((a) => (a.id === appId ? data.application : a)));
+        setApplications((prev) => prev.map((a) => (a.id === appId ? data.application : a)));
       }
     } catch (e) {
       console.error('Error updating application status:', e);
@@ -756,11 +783,24 @@ export default function App() {
                 jobs={jobs}
                 applications={applications}
                 interviews={interviews}
+                viewMode={activeTab === 'recruiter-interviews' ? 'interviews' : 'pipeline'}
                 onUpdateApplicationStatus={handleUpdateApplicationStatus}
-                onInterviewScheduled={(newIntv) => {
-                  setInterviews([newIntv, ...interviews]);
-                  // Also update application status
-                  handleUpdateApplicationStatus(newIntv.applicationId, 'INTERVIEW_SCHEDULED');
+                onInterviewScheduled={(savedIntv) => {
+                  setInterviews((prev) => {
+                    const exists = prev.some((i) => i.id === savedIntv.id);
+                    return exists
+                      ? prev.map((i) => (i.id === savedIntv.id ? savedIntv : i))
+                      : [savedIntv, ...prev];
+                  });
+                  if (savedIntv.applicationId) {
+                    setApplications((prev) =>
+                      prev.map((a) =>
+                        a.id === savedIntv.applicationId && a.status !== 'INTERVIEW_SCHEDULED'
+                          ? { ...a, status: 'INTERVIEW_SCHEDULED' }
+                          : a
+                      )
+                    );
+                  }
                 }}
                 onViewInterviewResult={handleViewInterviewResult}
                 onNavigateTab={(tab) => setActiveTab(tab)}

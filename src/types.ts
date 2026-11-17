@@ -189,6 +189,8 @@ export interface Application {
   candidateName: string;
   candidateEmail: string;
   candidateHeadline?: string;
+  candidateAvatar?: string;
+  candidateProfile?: CandidateProfile;
   jobId: string;
   jobTitle: string;
   companyName: string;
@@ -231,6 +233,10 @@ export interface Interview {
   applicationId: string;
   candidateId: string;
   candidateName: string;
+  candidateEmail?: string;
+  candidateHeadline?: string;
+  candidateAvatar?: string;
+  candidateProfile?: CandidateProfile;
   jobId: string;
   jobTitle: string;
   companyName: string;

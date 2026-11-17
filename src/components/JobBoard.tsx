@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Job, CandidateProfile, Application, AIMatchScore } from '../types.ts';
+import { getAuthToken } from '../utils/authToken.ts';
 import {
   Search,
   MapPin,
@@ -77,9 +78,13 @@ export const JobBoard: React.FC<JobBoardProps> = ({
 
     try {
       // Calculate match score preview
+      const token = getAuthToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
       const res = await fetch('/api/ai/match', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ jobId: job.id, candidateId: candidateProfile.id }),
       });
       const data = await res.json();
@@ -97,9 +102,13 @@ export const JobBoard: React.FC<JobBoardProps> = ({
     if (!selectedJob) return;
     setIsSubmittingApp(true);
     try {
+      const token = getAuthToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
       const res = await fetch('/api/applications', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           jobId: selectedJob.id,
           candidateId: candidateProfile.id,

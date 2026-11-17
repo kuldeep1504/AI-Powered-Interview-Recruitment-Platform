@@ -96,6 +96,88 @@ function ensureCandidateProfile(userId: string): CandidateProfile {
   });
 }
 
+function resolveCandidateHeadline(candidate?: CandidateProfile, fallbackHeadline?: string): string {
+  if (candidate?.headline && candidate.headline !== 'Candidate') {
+    return candidate.headline;
+  }
+  return candidate?.parsedResumeData?.headline || candidate?.headline || fallbackHeadline || '';
+}
+
+function resolveCandidateAndUser(candidateId?: string, candidateEmail?: string) {
+  let candidate = candidateId
+    ? db.getCandidateById(candidateId) || db.getCandidateByUserId(candidateId)
+    : undefined;
+  let candUser = candidate ? db.getUserById(candidate.userId) : undefined;
+
+  if (!candidate && candidateEmail) {
+    candUser = db.getUserByEmail(candidateEmail);
+    if (candUser) {
+      candidate = db.getCandidateByUserId(candUser.id);
+    }
+  }
+  return { candidate, candUser };
+}
+
+function enrichApplication(app: Application): Application {
+  const { candidate, candUser } = resolveCandidateAndUser(app.candidateId, app.candidateEmail);
+  return {
+    ...app,
+    candidateName: candUser?.name || candidate?.parsedResumeData?.name || app.candidateName,
+    candidateEmail: candUser?.email || candidate?.parsedResumeData?.email || app.candidateEmail,
+    candidateAvatar: candUser?.avatar ?? app.candidateAvatar,
+    candidateHeadline: resolveCandidateHeadline(candidate, app.candidateHeadline),
+    resumeFileName: candidate ? candidate.resumeFileName ?? app.resumeFileName : app.resumeFileName,
+    candidateProfile: candidate || app.candidateProfile,
+  };
+}
+
+function enrichInterview(interview: Interview): Interview {
+  const { candidate, candUser } = resolveCandidateAndUser(interview.candidateId, interview.candidateEmail);
+  return {
+    ...interview,
+    candidateName: candUser?.name || candidate?.parsedResumeData?.name || interview.candidateName,
+    candidateEmail: candUser?.email || candidate?.parsedResumeData?.email || interview.candidateEmail,
+    candidateHeadline: resolveCandidateHeadline(candidate, interview.candidateHeadline),
+    candidateAvatar: candUser?.avatar ?? interview.candidateAvatar,
+    candidateProfile: candidate || interview.candidateProfile,
+  };
+}
+
+function syncCandidateRecordsWithProfile(userId: string) {
+  const candUser = db.getUserById(userId);
+  const candidate = db.getCandidateByUserId(userId);
+  if (!candidate) return;
+
+  const syncedName = candUser?.name || candidate.parsedResumeData?.name;
+  const syncedEmail = candUser?.email || candidate.parsedResumeData?.email;
+  const syncedHeadline = resolveCandidateHeadline(candidate);
+
+  db.getApplicationsByCandidateId(candidate.id).forEach((app) => {
+    db.updateApplication(app.id, {
+      ...(syncedName ? { candidateName: syncedName } : {}),
+      ...(syncedEmail ? { candidateEmail: syncedEmail } : {}),
+      candidateHeadline: syncedHeadline,
+      ...(candidate.resumeFileName !== undefined ? { resumeFileName: candidate.resumeFileName } : {}),
+    });
+  });
+
+  db.getInterviews()
+    .filter((i) => i.candidateId === candidate.id)
+    .forEach((intv) => {
+      if (syncedName && intv.candidateName !== syncedName) {
+        db.updateInterview(intv.id, { candidateName: syncedName });
+      }
+    });
+
+  db.getInterviewResults()
+    .filter((r) => r.candidateId === candidate.id)
+    .forEach((resItem) => {
+      if (syncedName && resItem.candidateName !== syncedName) {
+        db.saveInterviewResult({ ...resItem, candidateName: syncedName });
+      }
+    });
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -298,6 +380,10 @@ async function startServer() {
         }
       }
 
+      if (user.role === 'candidate') {
+        syncCandidateRecordsWithProfile(user.id);
+      }
+
       res.json({ user: sanitizeUser(updatedUser), recruiterProfile: updatedRecruiter });
     } catch (err: any) {
       console.error('Update user profile error:', err);
@@ -369,6 +455,7 @@ async function startServer() {
         ...payload,
         userId: user.id,
       });
+      syncCandidateRecordsWithProfile(user.id);
       res.json({ profile: updated });
     } catch (err: any) {
       console.error('Update candidate profile error:', err);
@@ -460,6 +547,7 @@ async function startServer() {
         onboardingCompleted: true,
         updatedAt: new Date().toISOString(),
       });
+      syncCandidateRecordsWithProfile(user.id);
 
       res.json({ profile: updated });
     } catch (err: any) {
@@ -502,6 +590,7 @@ async function startServer() {
           skills: Array.from(new Set([...(existing.skills || []), ...flatSkills])),
           updatedAt: new Date().toISOString(),
         });
+        syncCandidateRecordsWithProfile(user.id);
 
         return res.json({ parsed, profile: updatedProfile });
       }
@@ -517,7 +606,7 @@ async function startServer() {
     const user = (req as any).currentUser;
     const profile = db.getCandidateByUserId(user.id);
     const candidateId = profile ? profile.id : 'cand-1';
-    const applications = db.getApplicationsByCandidateId(candidateId);
+    const applications = db.getApplicationsByCandidateId(candidateId).map(enrichApplication);
     res.json({ applications });
   });
 
@@ -639,18 +728,22 @@ async function startServer() {
     if (status) {
       apps = apps.filter((a) => a.status === status);
     }
-    res.json({ applications: apps });
+    res.json({ applications: apps.map(enrichApplication) });
   });
 
   app.post('/api/applications', requireAuth, async (req, res) => {
     try {
       const { jobId, candidateId } = req.body;
+      const reqUser = (req as any).currentUser as User | undefined;
       const job = db.getJobById(jobId);
       if (!job) return res.status(404).json({ error: 'Job not found' });
 
-      const candidate = candidateId
-        ? db.getCandidateById(candidateId) || db.getCandidates()[0]
-        : db.getCandidates()[0];
+      const candidate =
+        (candidateId ? db.getCandidateById(candidateId) : undefined) ||
+        (reqUser ? db.getCandidateByUserId(reqUser.id) : undefined) ||
+        (reqUser ? ensureCandidateProfile(reqUser.id) : db.getCandidates()[0]);
+
+      const candUser = db.getUserById(candidate.userId) || reqUser;
 
       // Check if already applied
       const existingApp = db.getApplications().find((a) => a.jobId === jobId && a.candidateId === candidate.id);
@@ -664,13 +757,13 @@ async function startServer() {
       const newApp: Application = {
         id: `app-${Date.now()}`,
         candidateId: candidate.id,
-        candidateName: candidate.parsedResumeData?.name || 'Alex Rivera',
-        candidateEmail: candidate.parsedResumeData?.email || 'alex.rivera@example.com',
-        candidateHeadline: candidate.headline,
+        candidateName: candUser?.name || candidate.parsedResumeData?.name || 'Candidate',
+        candidateEmail: candUser?.email || candidate.parsedResumeData?.email || '',
+        candidateHeadline: resolveCandidateHeadline(candidate),
         jobId: job.id,
         jobTitle: job.title,
         companyName: job.companyName,
-        resumeFileName: candidate.resumeFileName || 'Resume.pdf',
+        resumeFileName: candidate.resumeFileName || '',
         matchScore,
         status: 'APPLIED',
         appliedAt: new Date().toISOString(),
@@ -681,7 +774,6 @@ async function startServer() {
       db.createApplication(newApp);
 
       // Trigger notifications (SRS Section 24)
-      const candUser = db.getUserById(candidate.userId);
       if (candUser) {
         db.createNotification({
           id: `notif-${Date.now()}-1`,
@@ -705,7 +797,7 @@ async function startServer() {
         linkTab: 'recruiter-dashboard',
       });
 
-      res.status(201).json({ application: newApp });
+      res.status(201).json({ application: enrichApplication(newApp) });
     } catch (err: any) {
       console.error('Application error:', err);
       res.status(500).json({ error: 'Failed to submit application', details: err.message });
@@ -736,7 +828,7 @@ async function startServer() {
       }
     }
 
-    res.json({ application: updated });
+    res.json({ application: enrichApplication(updated) });
   });
 
   // ---------------- INTERVIEWS API ----------------
@@ -746,14 +838,14 @@ async function startServer() {
     if (candidateId) list = list.filter((i) => i.candidateId === candidateId);
     if (recruiterId) list = list.filter((i) => i.recruiterId === recruiterId);
     if (status) list = list.filter((i) => i.status === status);
-    res.json({ interviews: list });
+    res.json({ interviews: list.map(enrichInterview) });
   });
 
   app.get('/api/interviews/:id', requireAuth, (req, res) => {
     const interview = db.getInterviewById(req.params.id);
     if (!interview) return res.status(404).json({ error: 'Interview not found' });
     const result = db.getInterviewResultByInterviewId(interview.id);
-    res.json({ interview, result });
+    res.json({ interview: enrichInterview(interview), result });
   });
 
   app.post('/api/interviews', requireAuth, async (req, res) => {
@@ -761,7 +853,7 @@ async function startServer() {
       const {
         applicationId,
         type = 'AI Technical',
-        durationMinutes = 30,
+        durationMinutes,
         difficulty = 'Senior',
         topicCount = 4,
         scheduledAt,
@@ -771,9 +863,32 @@ async function startServer() {
       if (!appRecord) return res.status(404).json({ error: 'Application not found' });
 
       const job = db.getJobById(appRecord.jobId);
-      const candidate = db.getCandidateById(appRecord.candidateId) || db.getCandidates()[0];
-
       if (!job) return res.status(404).json({ error: 'Associated job not found' });
+
+      const { candidate: resolvedCand, candUser } = resolveCandidateAndUser(
+        appRecord.candidateId,
+        appRecord.candidateEmail
+      );
+      const candidate: CandidateProfile = resolvedCand || {
+        id: appRecord.candidateId,
+        userId: candUser?.id || appRecord.candidateId,
+        headline: appRecord.candidateHeadline || 'Candidate',
+        bio: '',
+        location: '',
+        phone: '',
+        yearsOfExperience: 0,
+        education: [],
+        skills: [],
+        experience: [],
+        projects: [],
+        certifications: [],
+        links: {},
+        updatedAt: new Date().toISOString(),
+      };
+
+      const parsedCount = Number(topicCount) || 4;
+      const resolvedDuration =
+        Number(durationMinutes) || (parsedCount === 3 ? 20 : parsedCount === 5 ? 40 : 30);
 
       // Generate targeted questions via Gemini AI
       const questions = await generateInterviewQuestionsWithAI(
@@ -781,23 +896,28 @@ async function startServer() {
         candidate,
         type,
         difficulty,
-        topicCount
+        parsedCount
       );
+
+      const syncedName = candUser?.name || candidate.parsedResumeData?.name || appRecord.candidateName;
 
       const newInterview: Interview = {
         id: `int-${Date.now()}`,
         applicationId: appRecord.id,
         candidateId: candidate.id,
-        candidateName: appRecord.candidateName,
+        candidateName: syncedName,
+        candidateEmail: candUser?.email || appRecord.candidateEmail,
+        candidateHeadline: resolveCandidateHeadline(candidate, appRecord.candidateHeadline),
+        candidateAvatar: candUser?.avatar ?? appRecord.candidateAvatar,
         jobId: job.id,
         jobTitle: job.title,
         companyName: job.companyName,
         recruiterId: 'rec-1',
         type,
         scheduledAt: scheduledAt || new Date().toISOString(),
-        durationMinutes: Number(durationMinutes) || 30,
+        durationMinutes: resolvedDuration,
         difficulty,
-        topicCount: Number(topicCount) || 4,
+        topicCount: parsedCount,
         status: 'SCHEDULED',
         meetingId: `meet-${Math.random().toString(36).substring(2, 9)}`,
         questions,
@@ -808,7 +928,6 @@ async function startServer() {
       db.createInterview(newInterview);
 
       // Notification triggers (SRS Section 24)
-      const candUser = db.getUserById(candidate.userId);
       if (candUser) {
         db.createNotification({
           id: `notif-${Date.now()}-int-cand`,
@@ -832,17 +951,153 @@ async function startServer() {
         linkTab: 'recruiter-dashboard',
       });
 
-      res.status(201).json({ interview: newInterview });
+      res.status(201).json({ interview: enrichInterview(newInterview) });
     } catch (err: any) {
       console.error('Interview schedule error:', err);
       res.status(500).json({ error: 'Failed to schedule interview', details: err.message });
     }
   });
 
+  app.patch('/api/interviews/:id', requireAuth, async (req, res) => {
+    try {
+      const existing = db.getInterviewById(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: 'Interview not found' });
+      }
+
+      const {
+        scheduledAt,
+        type,
+        durationMinutes,
+        difficulty,
+        topicCount,
+        regenerateQuestions,
+      } = req.body;
+
+      if (scheduledAt !== undefined && (!scheduledAt || Number.isNaN(new Date(scheduledAt).getTime()))) {
+        return res.status(400).json({ error: 'Please provide a valid scheduled date and time.' });
+      }
+
+      const nextType = type || existing.type;
+      const nextDifficulty = difficulty || existing.difficulty;
+      const nextTopicCount = Number(topicCount) || existing.topicCount || 4;
+      const nextDuration =
+        Number(durationMinutes) ||
+        (topicCount
+          ? nextTopicCount === 3
+            ? 20
+            : nextTopicCount === 5
+              ? 40
+              : 30
+          : existing.durationMinutes || 30);
+
+      const formatChanged =
+        nextType !== existing.type ||
+        nextDifficulty !== existing.difficulty ||
+        nextTopicCount !== existing.topicCount;
+
+      let nextQuestions = existing.questions;
+      let nextQuestionIndex = existing.currentQuestionIndex || 0;
+
+      if (regenerateQuestions === true || formatChanged) {
+        const job = db.getJobById(existing.jobId);
+        const { candidate: resolvedCand } = resolveCandidateAndUser(
+          existing.candidateId,
+          existing.candidateEmail
+        );
+        if (job) {
+          const fallbackCand: CandidateProfile = resolvedCand || {
+            id: existing.candidateId,
+            userId: existing.candidateId,
+            headline: existing.candidateHeadline || 'Candidate',
+            bio: '',
+            location: '',
+            phone: '',
+            yearsOfExperience: 0,
+            education: [],
+            skills: [],
+            experience: [],
+            projects: [],
+            certifications: [],
+            links: {},
+            updatedAt: new Date().toISOString(),
+          };
+          nextQuestions = await generateInterviewQuestionsWithAI(
+            job,
+            fallbackCand,
+            nextType,
+            nextDifficulty,
+            nextTopicCount
+          );
+          nextQuestionIndex = 0;
+        }
+      }
+
+      const updated = db.updateInterview(existing.id, {
+        scheduledAt: scheduledAt || existing.scheduledAt,
+        type: nextType,
+        difficulty: nextDifficulty,
+        topicCount: nextTopicCount,
+        durationMinutes: nextDuration,
+        questions: nextQuestions,
+        currentQuestionIndex: nextQuestionIndex,
+        status: existing.status === 'COMPLETED' ? 'COMPLETED' : 'SCHEDULED',
+      });
+
+      if (!updated) {
+        return res.status(404).json({ error: 'Interview not found' });
+      }
+
+      // Ensure linked application reflects scheduled status
+      if (updated.applicationId) {
+        const appRecord = db.getApplicationById(updated.applicationId);
+        if (appRecord && appRecord.status !== 'INTERVIEW_SCHEDULED' && updated.status === 'SCHEDULED') {
+          db.updateApplication(appRecord.id, { status: 'INTERVIEW_SCHEDULED' });
+        }
+      }
+
+      const { candUser } = resolveCandidateAndUser(updated.candidateId, updated.candidateEmail);
+      const formattedDate = new Date(updated.scheduledAt).toLocaleDateString();
+      const formattedTime = new Date(updated.scheduledAt).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      if (candUser) {
+        db.createNotification({
+          id: `notif-${Date.now()}-resched-cand`,
+          userId: candUser.id,
+          title: 'Interview Rescheduled',
+          message: `Your ${updated.type} session for ${updated.jobTitle} has been rescheduled to ${formattedDate} at ${formattedTime}.`,
+          type: 'interview_scheduled',
+          read: false,
+          timestamp: new Date().toISOString(),
+          linkTab: 'candidate-dashboard',
+        });
+      }
+
+      db.createNotification({
+        id: `notif-${Date.now()}-resched-rec`,
+        userId: 'usr-rec-1',
+        title: 'Interview Rescheduled',
+        message: `${updated.type} session for ${updated.candidateName} updated to ${formattedDate} at ${formattedTime}.`,
+        type: 'interview_scheduled',
+        read: false,
+        timestamp: new Date().toISOString(),
+        linkTab: 'recruiter-interviews',
+      });
+
+      res.json({ interview: enrichInterview(updated) });
+    } catch (err: any) {
+      console.error('Interview reschedule error:', err);
+      res.status(500).json({ error: 'Failed to reschedule interview', details: err.message });
+    }
+  });
+
   app.post('/api/interviews/:id/start', (req, res) => {
     const updated = db.updateInterview(req.params.id, { status: 'IN_PROGRESS' });
     if (!updated) return res.status(404).json({ error: 'Interview not found' });
-    res.json({ interview: updated });
+    res.json({ interview: enrichInterview(updated) });
   });
 
   app.post('/api/interviews/:id/complete', async (req, res) => {

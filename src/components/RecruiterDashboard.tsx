@@ -7,26 +7,33 @@ import {
   Briefcase,
   Video,
   CheckCircle2,
-  TrendingUp,
-  Sparkles,
-  Filter,
   Search,
-  ChevronRight,
   ShieldCheck,
-  AlertCircle,
   FileText,
   Calendar,
   Award,
   Sliders,
   Scale,
-  RotateCcw,
-  ArrowUpDown,
+  User as UserIcon,
+  Mail,
+  Phone,
+  MapPin,
+  GraduationCap,
+  Code2,
+  Globe,
+  Github,
+  Linkedin,
+  Clock,
+  X,
+  Eye,
+  ExternalLink,
 } from 'lucide-react';
 
 interface RecruiterDashboardProps {
   jobs: Job[];
   applications: Application[];
   interviews: Interview[];
+  viewMode?: 'pipeline' | 'interviews';
   onUpdateApplicationStatus: (appId: string, status: ApplicationStatus, notes?: string) => void;
   onInterviewScheduled: (interview: Interview) => void;
   onViewInterviewResult: (interviewId: string) => void;
@@ -37,6 +44,7 @@ export const RecruiterDashboard: React.FC<RecruiterDashboardProps> = ({
   jobs,
   applications,
   interviews,
+  viewMode = 'pipeline',
   onUpdateApplicationStatus,
   onInterviewScheduled,
   onViewInterviewResult,
@@ -63,7 +71,11 @@ export const RecruiterDashboard: React.FC<RecruiterDashboardProps> = ({
   const [interviewResults, setInterviewResults] = useState<InterviewResult[]>([]);
 
   // Modals state
-  const [scheduleTargetApp, setScheduleTargetApp] = useState<Application | null>(null);
+  const [scheduleTarget, setScheduleTarget] = useState<{
+    application: Application;
+    existingInterview?: Interview | null;
+  } | null>(null);
+  const [profileDetailApp, setProfileDetailApp] = useState<Application | null>(null);
   const [statusConfirmTarget, setStatusConfirmTarget] = useState<{
     app: Application;
     newStatus: ApplicationStatus;
@@ -129,11 +141,16 @@ export const RecruiterDashboard: React.FC<RecruiterDashboardProps> = ({
   // Filter & sort applications
   const filteredApps = applications
     .filter((app) => {
+      const q = searchQuery.toLowerCase().trim();
       const matchesJob = selectedJobFilter === 'All' || app.jobId === selectedJobFilter;
       const matchesStatus = selectedStatusFilter === 'All' || app.status === selectedStatusFilter;
       const matchesQuery =
-        app.candidateName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        app.jobTitle.toLowerCase().includes(searchQuery.toLowerCase());
+        !q ||
+        app.candidateName.toLowerCase().includes(q) ||
+        (app.candidateEmail || '').toLowerCase().includes(q) ||
+        (app.candidateHeadline || '').toLowerCase().includes(q) ||
+        app.jobTitle.toLowerCase().includes(q) ||
+        (app.candidateProfile?.skills || []).some((s) => s.toLowerCase().includes(q));
       return matchesJob && matchesStatus && matchesQuery;
     })
     .sort((a, b) => {
@@ -174,13 +191,406 @@ export const RecruiterDashboard: React.FC<RecruiterDashboardProps> = ({
   };
 
   const findInterviewForApp = (appId: string) => {
-    return interviews.find((i) => i.applicationId === appId);
+    const matching = interviews.filter((i) => i.applicationId === appId);
+    if (matching.length === 0) return undefined;
+    return (
+      matching.find((i) => i.status === 'COMPLETED') ||
+      matching.find((i) => i.status === 'SCHEDULED' || i.status === 'IN_PROGRESS') ||
+      matching[0]
+    );
   };
 
   const selectedAppsForComparison = applications.filter((a) => selectedCandidateIds.includes(a.id));
 
+  const scheduledInterviews = interviews
+    .filter((i) => i.status === 'SCHEDULED')
+    .filter((intv) => {
+      const q = searchQuery.toLowerCase().trim();
+      const linkedApp = applications.find((a) => a.id === intv.applicationId);
+      const matchesJob = selectedJobFilter === 'All' || intv.jobId === selectedJobFilter;
+      const matchesQuery =
+        !q ||
+        intv.candidateName.toLowerCase().includes(q) ||
+        (intv.candidateEmail || linkedApp?.candidateEmail || '').toLowerCase().includes(q) ||
+        (intv.candidateHeadline || linkedApp?.candidateHeadline || '').toLowerCase().includes(q) ||
+        intv.jobTitle.toLowerCase().includes(q) ||
+        intv.type.toLowerCase().includes(q) ||
+        (linkedApp?.candidateProfile?.skills || []).some((s) => s.toLowerCase().includes(q));
+      return matchesJob && matchesQuery;
+    })
+    .sort((a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime());
+
+  const buildFallbackAppFromInterview = (intv: Interview): Application => ({
+    id: intv.applicationId,
+    candidateId: intv.candidateId,
+    candidateName: intv.candidateName,
+    candidateEmail: intv.candidateEmail || '',
+    candidateHeadline: intv.candidateHeadline,
+    candidateAvatar: intv.candidateAvatar,
+    candidateProfile: intv.candidateProfile,
+    jobId: intv.jobId,
+    jobTitle: intv.jobTitle,
+    companyName: intv.companyName,
+    resumeFileName: intv.candidateProfile?.resumeFileName,
+    status: 'INTERVIEW_SCHEDULED',
+    appliedAt: intv.createdAt,
+    updatedAt: intv.createdAt,
+  });
+
   return (
     <div className="space-y-6">
+      {viewMode === 'interviews' ? (
+        <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-neutral-200/90 dark:border-neutral-800 shadow-xs overflow-hidden">
+          <div className="p-6 border-b border-neutral-100 dark:border-neutral-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center space-x-2">
+                <h3 className="text-lg font-bold text-neutral-900 dark:text-white">
+                  Scheduled Interviews
+                </h3>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                  {scheduledInterviews.length} Scheduled
+                </span>
+              </div>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
+                Showing only interviews currently in SCHEDULED status with live candidate profile details.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+                <input
+                  type="text"
+                  placeholder="Filter scheduled interviews..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-8 pr-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50/60 dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs focus:outline-none"
+                />
+              </div>
+
+              <select
+                value={selectedJobFilter}
+                onChange={(e) => setSelectedJobFilter(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50/60 dark:bg-neutral-800 text-neutral-900 dark:text-white text-xs focus:outline-none"
+              >
+                <option value="All">All Jobs</option>
+                {jobs.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {j.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-neutral-50 dark:bg-neutral-800/60 border-b border-neutral-100 dark:border-neutral-800 text-neutral-500 dark:text-neutral-400 font-semibold uppercase tracking-wider text-[10px]">
+                  <th className="py-3 px-6">Candidate &amp; Applied Role</th>
+                  <th className="py-3 px-4">Interview Format</th>
+                  <th className="py-3 px-4">Scheduled Date &amp; Time</th>
+                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-6 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+                {scheduledInterviews.length > 0 ? (
+                  scheduledInterviews.map((intv) => {
+                    const matchedApp =
+                      applications.find((a) => a.id === intv.applicationId) ||
+                      applications.find((a) => a.candidateId === intv.candidateId && a.jobId === intv.jobId);
+                    const candProfile = matchedApp?.candidateProfile || intv.candidateProfile;
+                    const linkedApp: Application = matchedApp
+                      ? { ...matchedApp, candidateProfile: candProfile }
+                      : buildFallbackAppFromInterview(intv);
+                    const isFresher = candProfile?.experienceTrack === 'fresher';
+                    const displayName = linkedApp.candidateName || intv.candidateName;
+                    const displayEmail = linkedApp.candidateEmail || intv.candidateEmail || '';
+                    const rawHeadline = linkedApp.candidateHeadline || intv.candidateHeadline || candProfile?.headline || '';
+                    const displayHeadline = rawHeadline && rawHeadline !== 'Candidate' ? rawHeadline : '';
+                    const displayAvatar = linkedApp.candidateAvatar || intv.candidateAvatar;
+                    const initials = displayName
+                      .split(' ')
+                      .map((n) => n[0])
+                      .join('')
+                      .slice(0, 2)
+                      .toUpperCase();
+
+                    return (
+                      <tr
+                        key={intv.id}
+                        className="hover:bg-neutral-50/60 dark:hover:bg-neutral-800/40 transition-colors"
+                      >
+                        <td className="py-4 px-6 align-top">
+                          <div className="flex items-start space-x-3">
+                            {displayAvatar ? (
+                              <img
+                                src={displayAvatar}
+                                alt={displayName}
+                                onClick={() => setProfileDetailApp(linkedApp)}
+                                className="w-11 h-11 rounded-xl object-cover border border-neutral-200 dark:border-neutral-700 shrink-0 cursor-pointer hover:ring-2 hover:ring-emerald-500 transition-all"
+                                title="View full candidate profile"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setProfileDetailApp(linkedApp)}
+                                className="w-11 h-11 rounded-xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-bold text-xs flex items-center justify-center shrink-0 cursor-pointer"
+                                title="View full candidate profile"
+                              >
+                                {initials || 'C'}
+                              </button>
+                            )}
+
+                            <div className="min-w-0 space-y-1.5">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setProfileDetailApp(linkedApp)}
+                                  className="font-bold text-neutral-900 dark:text-white text-sm hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors text-left cursor-pointer"
+                                >
+                                  {displayName}
+                                </button>
+                                {candProfile?.experienceTrack && (
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${
+                                      isFresher
+                                        ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                                        : 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                                    }`}
+                                  >
+                                    {isFresher
+                                      ? 'Fresher / Graduate'
+                                      : `Experienced • ${candProfile.yearsOfExperience || 0} yrs`}
+                                  </span>
+                                )}
+                              </div>
+
+                              {displayHeadline && (
+                                <div className="text-neutral-700 dark:text-neutral-200 text-[11px] font-medium">
+                                  {displayHeadline}
+                                </div>
+                              )}
+
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-neutral-500 dark:text-neutral-400">
+                                {displayEmail && (
+                                  <span className="inline-flex items-center">
+                                    <Mail className="w-3 h-3 mr-1 text-neutral-400" />
+                                    {displayEmail}
+                                  </span>
+                                )}
+                                {candProfile?.phone && (
+                                  <span className="inline-flex items-center">
+                                    <Phone className="w-3 h-3 mr-1 text-neutral-400" />
+                                    {candProfile.phone}
+                                  </span>
+                                )}
+                                {candProfile?.location && (
+                                  <span className="inline-flex items-center">
+                                    <MapPin className="w-3 h-3 mr-1 text-neutral-400" />
+                                    {candProfile.location}
+                                  </span>
+                                )}
+                              </div>
+
+                              {candProfile?.bio && (
+                                <p className="text-[11px] text-neutral-600 dark:text-neutral-400 line-clamp-2 max-w-xl leading-relaxed">
+                                  {candProfile.bio}
+                                </p>
+                              )}
+
+                              {/* Career Track / Education / Experience / Projects / Resume details added by candidate */}
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-neutral-600 dark:text-neutral-300">
+                                <span className="inline-flex items-center font-semibold text-neutral-800 dark:text-neutral-200">
+                                  <Briefcase className="w-3 h-3 mr-1 text-emerald-600 dark:text-emerald-400" />
+                                  {intv.jobTitle} ({intv.companyName})
+                                </span>
+
+                                {isFresher && candProfile?.fresherDetails?.collegeName && (
+                                  <span className="inline-flex items-center">
+                                    <GraduationCap className="w-3 h-3 mr-1 text-neutral-400" />
+                                    {candProfile.fresherDetails.collegeName}
+                                    {candProfile.fresherDetails.graduationYear
+                                      ? ` (${candProfile.fresherDetails.graduationYear})`
+                                      : ''}
+                                  </span>
+                                )}
+
+                                {!isFresher && candProfile?.experiencedDetails?.currentRole && (
+                                  <span className="inline-flex items-center">
+                                    <Briefcase className="w-3 h-3 mr-1 text-neutral-400" />
+                                    {candProfile.experiencedDetails.currentRole}
+                                    {candProfile.experiencedDetails.currentCompany
+                                      ? ` at ${candProfile.experiencedDetails.currentCompany}`
+                                      : ''}
+                                  </span>
+                                )}
+
+                                {candProfile?.education && candProfile.education.length > 0 && (
+                                  <span className="inline-flex items-center">
+                                    <GraduationCap className="w-3 h-3 mr-1 text-neutral-400" />
+                                    {candProfile.education[0].degree}
+                                    {candProfile.education[0].institution
+                                      ? ` • ${candProfile.education[0].institution}`
+                                      : ''}
+                                    {candProfile.education.length > 1
+                                      ? ` (+${candProfile.education.length - 1})`
+                                      : ''}
+                                  </span>
+                                )}
+
+                                {candProfile?.experience && candProfile.experience.length > 0 && (
+                                  <span className="inline-flex items-center">
+                                    <Briefcase className="w-3 h-3 mr-1 text-neutral-400" />
+                                    {candProfile.experience.length} Exp Role{candProfile.experience.length > 1 ? 's' : ''}
+                                  </span>
+                                )}
+
+                                {candProfile?.projects && candProfile.projects.length > 0 && (
+                                  <span className="inline-flex items-center">
+                                    <Code2 className="w-3 h-3 mr-1 text-neutral-400" />
+                                    {candProfile.projects.length} Project{candProfile.projects.length > 1 ? 's' : ''}
+                                  </span>
+                                )}
+
+                                {candProfile?.certifications && candProfile.certifications.length > 0 && (
+                                  <span className="inline-flex items-center">
+                                    <Award className="w-3 h-3 mr-1 text-neutral-400" />
+                                    {candProfile.certifications.length} Cert{candProfile.certifications.length > 1 ? 's' : ''}
+                                  </span>
+                                )}
+
+                                {(candProfile?.resumeFileName || linkedApp.resumeFileName) && (
+                                  <span className="inline-flex items-center font-mono text-neutral-500 dark:text-neutral-400">
+                                    <FileText className="w-3 h-3 mr-1 text-neutral-400" />
+                                    {candProfile?.resumeFileName || linkedApp.resumeFileName}
+                                  </span>
+                                )}
+                              </div>
+
+                              {(candProfile?.links?.github || candProfile?.links?.linkedin || candProfile?.links?.portfolio) && (
+                                <div className="flex flex-wrap items-center gap-2 text-[10px]">
+                                  {candProfile.links.github && (
+                                    <a
+                                      href={candProfile.links.github}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center text-neutral-600 dark:text-neutral-300 hover:text-emerald-600 dark:hover:text-emerald-400 underline"
+                                    >
+                                      <Github className="w-3 h-3 mr-1" /> GitHub
+                                    </a>
+                                  )}
+                                  {candProfile.links.linkedin && (
+                                    <a
+                                      href={candProfile.links.linkedin}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center text-neutral-600 dark:text-neutral-300 hover:text-emerald-600 dark:hover:text-emerald-400 underline"
+                                    >
+                                      <Linkedin className="w-3 h-3 mr-1" /> LinkedIn
+                                    </a>
+                                  )}
+                                  {candProfile.links.portfolio && (
+                                    <a
+                                      href={candProfile.links.portfolio}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center text-neutral-600 dark:text-neutral-300 hover:text-emerald-600 dark:hover:text-emerald-400 underline"
+                                    >
+                                      <Globe className="w-3 h-3 mr-1" /> Portfolio
+                                    </a>
+                                  )}
+                                </div>
+                              )}
+
+                              {candProfile?.skills && candProfile.skills.length > 0 && (
+                                <div className="flex flex-wrap gap-1 pt-0.5">
+                                  {candProfile.skills.slice(0, 6).map((skill, idx) => (
+                                    <span
+                                      key={idx}
+                                      className="px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 text-[10px] font-medium border border-neutral-200/70 dark:border-neutral-700"
+                                    >
+                                      {skill}
+                                    </span>
+                                  ))}
+                                  {candProfile.skills.length > 6 && (
+                                    <span className="px-1.5 py-0.5 text-[10px] text-neutral-400">
+                                      +{candProfile.skills.length - 6} more
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="py-4 px-4 align-top">
+                          <div className="font-bold text-neutral-900 dark:text-white">{intv.type}</div>
+                          <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5">
+                            {intv.difficulty} • {intv.durationMinutes} mins • {intv.topicCount} questions
+                          </div>
+                          <div className="text-[10px] font-mono text-neutral-400 mt-1">
+                            Room: {intv.meetingId}
+                          </div>
+                        </td>
+
+                        <td className="py-4 px-4 align-top">
+                          <div className="font-semibold text-neutral-900 dark:text-white flex items-center">
+                            <Calendar className="w-3.5 h-3.5 mr-1.5 text-emerald-600 dark:text-emerald-400" />
+                            {new Date(intv.scheduledAt).toLocaleDateString()}
+                          </div>
+                          <div className="text-[11px] text-neutral-500 dark:text-neutral-400 flex items-center mt-1">
+                            <Clock className="w-3 h-3 mr-1.5 text-neutral-400" />
+                            {new Date(intv.scheduledAt).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </div>
+                        </td>
+
+                        <td className="py-4 px-4 align-top">
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                            SCHEDULED
+                          </span>
+                        </td>
+
+                        <td className="py-4 px-6 text-right align-top">
+                          <div className="inline-flex flex-wrap items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setProfileDetailApp(linkedApp)}
+                              className="inline-flex items-center px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 transition-colors cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5 mr-1 text-emerald-600 dark:text-emerald-400" />
+                              Profile
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setScheduleTarget({ application: linkedApp, existingInterview: intv })}
+                              className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:hover:bg-white text-white dark:text-neutral-900 transition-colors cursor-pointer"
+                            >
+                              <Video className="w-3.5 h-3.5 mr-1 text-emerald-400" />
+                              Reschedule
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="py-10 text-center text-xs text-neutral-400">
+                      No scheduled interviews found. Schedule an interview from the Candidate Pipeline to see it here.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <>
       {/* Top Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="p-5 rounded-2xl bg-white dark:bg-neutral-900 border border-neutral-200/90 dark:border-neutral-800 shadow-xs">
@@ -527,16 +937,124 @@ export const RecruiterDashboard: React.FC<RecruiterDashboardProps> = ({
                         />
                       </td>
 
-                      {/* Candidate Column */}
-                      <td className="py-4 px-4">
-                        <div className="font-bold text-neutral-900 dark:text-white text-sm">{app.candidateName}</div>
-                        <div className="text-neutral-500 dark:text-neutral-400 text-[11px] mt-0.5">
-                          {app.candidateHeadline || app.candidateEmail}
-                        </div>
-                        <div className="text-neutral-400 text-[10px] mt-1 flex items-center">
-                          <Briefcase className="w-3 h-3 mr-1 text-neutral-400" />
-                          {app.jobTitle}
-                        </div>
+                      {/* Candidate Column (Synchronized with Candidate Profile & Interview) */}
+                      <td className="py-4 px-4 align-top">
+                        {(() => {
+                          const candProfile = app.candidateProfile;
+                          const isFresher = candProfile?.experienceTrack === 'fresher';
+                          const initials = app.candidateName
+                            .split(' ')
+                            .map((n) => n[0])
+                            .join('')
+                            .slice(0, 2)
+                            .toUpperCase();
+
+                          return (
+                            <div className="flex items-start space-x-3">
+                              {app.candidateAvatar ? (
+                                <img
+                                  src={app.candidateAvatar}
+                                  alt={app.candidateName}
+                                  onClick={() => setProfileDetailApp(app)}
+                                  className="w-10 h-10 rounded-xl object-cover border border-neutral-200 dark:border-neutral-700 shrink-0 cursor-pointer hover:ring-2 hover:ring-emerald-500 transition-all"
+                                  title="View candidate profile"
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setProfileDetailApp(app)}
+                                  className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-bold text-xs flex items-center justify-center shrink-0 cursor-pointer"
+                                  title="View candidate profile"
+                                >
+                                  {initials || 'C'}
+                                </button>
+                              )}
+
+                              <div className="min-w-0 space-y-1">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => setProfileDetailApp(app)}
+                                    className="font-bold text-neutral-900 dark:text-white text-sm hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors text-left cursor-pointer"
+                                    title="View full candidate profile"
+                                  >
+                                    {app.candidateName}
+                                  </button>
+                                  {candProfile?.experienceTrack && (
+                                    <span
+                                      className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${
+                                        isFresher
+                                          ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                                          : 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                                      }`}
+                                    >
+                                      {isFresher
+                                        ? 'Fresher'
+                                        : `Experienced • ${candProfile.yearsOfExperience || 0} yrs`}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="text-neutral-600 dark:text-neutral-300 text-[11px] font-medium line-clamp-1">
+                                  {app.candidateHeadline || app.candidateEmail}
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] text-neutral-500 dark:text-neutral-400">
+                                  {app.candidateEmail && (
+                                    <span className="inline-flex items-center">
+                                      <Mail className="w-3 h-3 mr-1 text-neutral-400" />
+                                      {app.candidateEmail}
+                                    </span>
+                                  )}
+                                  {candProfile?.location && (
+                                    <span className="inline-flex items-center">
+                                      <MapPin className="w-3 h-3 mr-1 text-neutral-400" />
+                                      {candProfile.location}
+                                    </span>
+                                  )}
+                                  {candProfile?.phone && (
+                                    <span className="inline-flex items-center">
+                                      <Phone className="w-3 h-3 mr-1 text-neutral-400" />
+                                      {candProfile.phone}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="text-neutral-500 dark:text-neutral-400 text-[10px] flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
+                                  <span className="inline-flex items-center font-medium text-neutral-700 dark:text-neutral-300">
+                                    <Briefcase className="w-3 h-3 mr-1 text-neutral-400" />
+                                    {app.jobTitle}
+                                  </span>
+                                  {interview && (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-purple-50 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 font-semibold">
+                                      <Calendar className="w-2.5 h-2.5 mr-1" />
+                                      {interview.type} ({interview.status.replace('_', ' ')}) •{' '}
+                                      {new Date(interview.scheduledAt).toLocaleDateString()}
+                                    </span>
+                                  )}
+                                </div>
+
+                                {candProfile?.skills && candProfile.skills.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 pt-1">
+                                    {candProfile.skills.slice(0, 4).map((skill, idx) => (
+                                      <span
+                                        key={idx}
+                                        className="px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 text-[10px] font-medium border border-neutral-200/70 dark:border-neutral-700"
+                                      >
+                                        {skill}
+                                      </span>
+                                    ))}
+                                    {candProfile.skills.length > 4 && (
+                                      <span className="px-1.5 py-0.5 text-[10px] text-neutral-400">
+                                        +{candProfile.skills.length - 4} more
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       {/* Composite Ranking Column */}
@@ -607,24 +1125,36 @@ export const RecruiterDashboard: React.FC<RecruiterDashboardProps> = ({
                       </td>
 
                       {/* Actions */}
-                      <td className="py-4 px-6 text-right space-x-2">
-                        {interview && interview.status === 'COMPLETED' ? (
+                      <td className="py-4 px-6 text-right">
+                        <div className="inline-flex flex-wrap items-center justify-end gap-2">
                           <button
-                            onClick={() => onViewInterviewResult(interview.id)}
-                            className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/80 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 transition-colors"
+                            type="button"
+                            onClick={() => setProfileDetailApp(app)}
+                            className="inline-flex items-center px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 transition-colors cursor-pointer"
+                            title="View full candidate profile details"
                           >
-                            <Award className="w-3.5 h-3.5 mr-1" />
-                            AI Report
+                            <Eye className="w-3.5 h-3.5 mr-1 text-emerald-600 dark:text-emerald-400" />
+                            Profile
                           </button>
-                        ) : (
-                          <button
-                            onClick={() => setScheduleTargetApp(app)}
-                            className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:hover:bg-white text-white dark:text-neutral-900 transition-colors"
-                          >
-                            <Video className="w-3.5 h-3.5 mr-1 text-emerald-400" />
-                            Schedule Interview
-                          </button>
-                        )}
+
+                          {interview && interview.status === 'COMPLETED' ? (
+                            <button
+                              onClick={() => onViewInterviewResult(interview.id)}
+                              className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/80 hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 transition-colors cursor-pointer"
+                            >
+                              <Award className="w-3.5 h-3.5 mr-1" />
+                              AI Report
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => setScheduleTarget({ application: app, existingInterview: interview || null })}
+                              className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-semibold bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:hover:bg-white text-white dark:text-neutral-900 transition-colors cursor-pointer"
+                            >
+                              <Video className="w-3.5 h-3.5 mr-1 text-emerald-400" />
+                              {interview ? 'Reschedule' : 'Schedule Interview'}
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -640,6 +1170,8 @@ export const RecruiterDashboard: React.FC<RecruiterDashboardProps> = ({
           </table>
         </div>
       </div>
+        </>
+      )}
 
       {/* Human Decision Confirmation Modal (SRS Section 50 Fairness Constraint) */}
       {statusConfirmTarget && (
@@ -700,17 +1232,564 @@ export const RecruiterDashboard: React.FC<RecruiterDashboardProps> = ({
         />
       )}
 
-      {/* Schedule Interview Modal */}
-      {scheduleTargetApp && (
+      {/* Schedule / Reschedule Interview Modal */}
+      {scheduleTarget && (
         <ScheduleInterviewModal
-          application={scheduleTargetApp}
-          onClose={() => setScheduleTargetApp(null)}
+          application={scheduleTarget.application}
+          existingInterview={scheduleTarget.existingInterview}
+          onClose={() => setScheduleTarget(null)}
           onScheduled={(intv) => {
             onInterviewScheduled(intv);
-            setScheduleTargetApp(null);
+            setScheduleTarget(null);
           }}
         />
       )}
+
+      {/* Candidate Profile Details Modal (Exact match with Candidate's Profile) */}
+      {profileDetailApp && (() => {
+        const candProfile = profileDetailApp.candidateProfile;
+        const linkedInterview = findInterviewForApp(profileDetailApp.id);
+        const isFresher = candProfile?.experienceTrack === 'fresher';
+        const initials = profileDetailApp.candidateName
+          .split(' ')
+          .map((n) => n[0])
+          .join('')
+          .slice(0, 2)
+          .toUpperCase();
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/75 backdrop-blur-xs p-3 sm:p-6 overflow-y-auto animate-in fade-in duration-200">
+            <div className="bg-white dark:bg-neutral-900 rounded-3xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-neutral-200 dark:border-neutral-800 my-auto overflow-hidden">
+              {/* Modal Header */}
+              <div className="p-6 border-b border-neutral-100 dark:border-neutral-800 flex items-start justify-between gap-4 bg-neutral-50/70 dark:bg-neutral-900">
+                <div className="flex items-start space-x-4">
+                  {profileDetailApp.candidateAvatar ? (
+                    <img
+                      src={profileDetailApp.candidateAvatar}
+                      alt={profileDetailApp.candidateName}
+                      className="w-16 h-16 rounded-2xl object-cover border border-neutral-200 dark:border-neutral-700 shrink-0"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 rounded-2xl bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-black text-xl flex items-center justify-center shrink-0">
+                      {initials || 'C'}
+                    </div>
+                  )}
+
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-xl font-black text-neutral-900 dark:text-white">
+                        {profileDetailApp.candidateName}
+                      </h2>
+                      {candProfile?.experienceTrack && (
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
+                            isFresher
+                              ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                              : 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                          }`}
+                        >
+                          {isFresher
+                            ? 'Fresher / Graduate Track'
+                            : `Experienced • ${candProfile.yearsOfExperience || 0} Years`}
+                        </span>
+                      )}
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 border border-neutral-200 dark:border-neutral-700">
+                        {profileDetailApp.status.replace('_', ' ')}
+                      </span>
+                    </div>
+
+                    {profileDetailApp.candidateHeadline && (
+                      <p className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 mt-1">
+                        {profileDetailApp.candidateHeadline}
+                      </p>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-neutral-500 dark:text-neutral-400 mt-2">
+                      {profileDetailApp.candidateEmail && (
+                        <span className="inline-flex items-center">
+                          <Mail className="w-3.5 h-3.5 mr-1 text-neutral-400" />
+                          {profileDetailApp.candidateEmail}
+                        </span>
+                      )}
+                      {candProfile?.phone && (
+                        <span className="inline-flex items-center">
+                          <Phone className="w-3.5 h-3.5 mr-1 text-neutral-400" />
+                          {candProfile.phone}
+                        </span>
+                      )}
+                      {candProfile?.location && (
+                        <span className="inline-flex items-center">
+                          <MapPin className="w-3.5 h-3.5 mr-1 text-neutral-400" />
+                          {candProfile.location}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setProfileDetailApp(null)}
+                  className="p-2 rounded-xl text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                  aria-label="Close candidate profile"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-6 overflow-y-auto space-y-6 text-xs">
+                {/* Application & Interview Synchronization Strip */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 rounded-2xl bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-700 space-y-1.5">
+                    <div className="font-bold uppercase tracking-wider text-[10px] text-neutral-500 dark:text-neutral-400 flex items-center space-x-1.5">
+                      <Briefcase className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Applied Position Details</span>
+                    </div>
+                    <div className="font-bold text-sm text-neutral-900 dark:text-white">
+                      {profileDetailApp.jobTitle}
+                    </div>
+                    <div className="text-neutral-500 dark:text-neutral-400">
+                      {profileDetailApp.companyName} • Applied on{' '}
+                      {new Date(profileDetailApp.appliedAt).toLocaleDateString()}
+                    </div>
+                    {profileDetailApp.matchScore && (
+                      <div className="pt-1 font-semibold text-emerald-700 dark:text-emerald-400">
+                        AI Advisory Match: {profileDetailApp.matchScore.overallScore}% (Skills:{' '}
+                        {profileDetailApp.matchScore.breakdown.skillMatch}%, Experience:{' '}
+                        {profileDetailApp.matchScore.breakdown.experienceMatch}%)
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200/80 dark:border-purple-800/60 space-y-1.5">
+                    <div className="font-bold uppercase tracking-wider text-[10px] text-purple-700 dark:text-purple-400 flex items-center space-x-1.5">
+                      <Video className="w-3.5 h-3.5" />
+                      <span>Interview Details (Candidate: {linkedInterview?.candidateName || profileDetailApp.candidateName})</span>
+                    </div>
+                    {linkedInterview ? (
+                      <>
+                        <div className="font-bold text-sm text-neutral-900 dark:text-white">
+                          {linkedInterview.type} • {linkedInterview.status.replace('_', ' ')}
+                        </div>
+                        <div className="text-neutral-600 dark:text-neutral-300 flex items-center space-x-3">
+                          <span className="inline-flex items-center">
+                            <Calendar className="w-3.5 h-3.5 mr-1 text-purple-500" />
+                            {new Date(linkedInterview.scheduledAt).toLocaleString([], {
+                              dateStyle: 'medium',
+                              timeStyle: 'short',
+                            })}
+                          </span>
+                          <span className="inline-flex items-center">
+                            <Clock className="w-3.5 h-3.5 mr-1 text-purple-500" />
+                            {linkedInterview.durationMinutes} mins ({linkedInterview.difficulty})
+                          </span>
+                        </div>
+                        <div className="pt-1">
+                          {linkedInterview.status === 'COMPLETED' ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setProfileDetailApp(null);
+                                onViewInterviewResult(linkedInterview.id);
+                              }}
+                              className="inline-flex items-center px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] cursor-pointer"
+                            >
+                              <Award className="w-3 h-3 mr-1" /> View AI Evaluation Report
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const targetApp = profileDetailApp;
+                                setProfileDetailApp(null);
+                                setScheduleTarget({ application: targetApp, existingInterview: linkedInterview });
+                              }}
+                              className="inline-flex items-center px-3 py-1 rounded-lg bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 font-semibold text-[11px] cursor-pointer"
+                            >
+                              <Video className="w-3 h-3 mr-1" /> Update / Reschedule Interview
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-neutral-500 dark:text-neutral-400">
+                          No interview scheduled yet for this candidate application.
+                        </div>
+                        <div className="pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const targetApp = profileDetailApp;
+                              setProfileDetailApp(null);
+                              setScheduleTarget({ application: targetApp, existingInterview: null });
+                            }}
+                            className="inline-flex items-center px-3 py-1 rounded-lg bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 font-semibold text-[11px] cursor-pointer"
+                          >
+                            <Video className="w-3 h-3 mr-1" /> Schedule Interview
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Personal & Career Overview (Bio) */}
+                {candProfile?.bio && (
+                  <div className="space-y-2">
+                    <h4 className="font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 flex items-center space-x-1.5">
+                      <UserIcon className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Personal &amp; Career Summary</span>
+                    </h4>
+                    <p className="text-neutral-700 dark:text-neutral-300 leading-relaxed bg-neutral-50/70 dark:bg-neutral-800/50 p-4 rounded-2xl border border-neutral-200/80 dark:border-neutral-700">
+                      {candProfile.bio}
+                    </p>
+                  </div>
+                )}
+
+                {/* Career Track Specifics */}
+                {candProfile?.experienceTrack === 'fresher' && candProfile.fresherDetails && (
+                  <div className="space-y-2">
+                    <h4 className="font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 flex items-center space-x-1.5">
+                      <GraduationCap className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Fresher Track &amp; Academic Preferences</span>
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 rounded-2xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700">
+                      <div>
+                        <span className="text-neutral-400 block">College / University</span>
+                        <span className="font-bold text-neutral-900 dark:text-white">
+                          {candProfile.fresherDetails.collegeName || '—'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-neutral-400 block">Degree &amp; Field</span>
+                        <span className="font-bold text-neutral-900 dark:text-white">
+                          {[candProfile.fresherDetails.degree, candProfile.fresherDetails.fieldOfStudy]
+                            .filter(Boolean)
+                            .join(' in ') || '—'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-neutral-400 block">Graduation Year</span>
+                        <span className="font-bold text-neutral-900 dark:text-white">
+                          {candProfile.fresherDetails.graduationYear || '—'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-neutral-400 block">Target Entry-Level Role</span>
+                        <span className="font-bold text-neutral-900 dark:text-white">
+                          {candProfile.fresherDetails.targetRole || '—'}
+                        </span>
+                      </div>
+                      {candProfile.fresherDetails.finalYearProjectTitle && (
+                        <div className="sm:col-span-2">
+                          <span className="text-neutral-400 block">Final Year / Capstone Project</span>
+                          <span className="font-bold text-neutral-900 dark:text-white block">
+                            {candProfile.fresherDetails.finalYearProjectTitle}
+                          </span>
+                          {candProfile.fresherDetails.finalYearProjectSummary && (
+                            <span className="text-neutral-600 dark:text-neutral-300 text-[11px]">
+                              {candProfile.fresherDetails.finalYearProjectSummary}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {candProfile.fresherDetails.coreCoursework && candProfile.fresherDetails.coreCoursework.length > 0 && (
+                        <div className="sm:col-span-3">
+                          <span className="text-neutral-400 block mb-1">Core Coursework</span>
+                          <div className="flex flex-wrap gap-1">
+                            {candProfile.fresherDetails.coreCoursework.map((cw, cIdx) => (
+                              <span
+                                key={cIdx}
+                                className="px-2 py-0.5 rounded bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-[10px] font-medium text-neutral-700 dark:text-neutral-300"
+                              >
+                                {cw}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {candProfile?.experienceTrack !== 'fresher' && candProfile?.experiencedDetails && (
+                  <div className="space-y-2">
+                    <h4 className="font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 flex items-center space-x-1.5">
+                      <Briefcase className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Experienced Track Details</span>
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 rounded-2xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700">
+                      <div>
+                        <span className="text-neutral-400 block">Current / Latest Role</span>
+                        <span className="font-bold text-neutral-900 dark:text-white">
+                          {candProfile.experiencedDetails.currentRole || '—'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-neutral-400 block">Current / Past Company</span>
+                        <span className="font-bold text-neutral-900 dark:text-white">
+                          {candProfile.experiencedDetails.currentCompany || '—'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-neutral-400 block">Target Seniority &amp; Experience</span>
+                        <span className="font-bold text-neutral-900 dark:text-white">
+                          {candProfile.experiencedDetails.targetSeniority || '—'} ({candProfile.experiencedDetails.totalYears ?? candProfile.yearsOfExperience ?? 0} yrs)
+                        </span>
+                      </div>
+                      {candProfile.experiencedDetails.domain && (
+                        <div>
+                          <span className="text-neutral-400 block">Domain Focus</span>
+                          <span className="font-bold text-neutral-900 dark:text-white">
+                            {candProfile.experiencedDetails.domain}
+                          </span>
+                        </div>
+                      )}
+                      {candProfile.experiencedDetails.notableAchievement && (
+                        <div className="sm:col-span-2">
+                          <span className="text-neutral-400 block">Notable Achievement</span>
+                          <span className="text-neutral-700 dark:text-neutral-300">
+                            {candProfile.experiencedDetails.notableAchievement}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Social & Portfolio Links */}
+                {(candProfile?.links?.github || candProfile?.links?.linkedin || candProfile?.links?.portfolio) && (
+                  <div className="space-y-2">
+                    <h4 className="font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 flex items-center space-x-1.5">
+                      <Globe className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Social &amp; Portfolio Links</span>
+                    </h4>
+                    <div className="flex flex-wrap gap-2">
+                      {candProfile.links.github && (
+                        <a
+                          href={candProfile.links.github}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center px-3 py-1.5 rounded-xl bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 font-semibold border border-neutral-200 dark:border-neutral-700"
+                        >
+                          <Github className="w-3.5 h-3.5 mr-1.5" /> GitHub <ExternalLink className="w-3 h-3 ml-1 opacity-60" />
+                        </a>
+                      )}
+                      {candProfile.links.linkedin && (
+                        <a
+                          href={candProfile.links.linkedin}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center px-3 py-1.5 rounded-xl bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 font-semibold border border-neutral-200 dark:border-neutral-700"
+                        >
+                          <Linkedin className="w-3.5 h-3.5 mr-1.5" /> LinkedIn <ExternalLink className="w-3 h-3 ml-1 opacity-60" />
+                        </a>
+                      )}
+                      {candProfile.links.portfolio && (
+                        <a
+                          href={candProfile.links.portfolio}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center px-3 py-1.5 rounded-xl bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 font-semibold border border-neutral-200 dark:border-neutral-700"
+                        >
+                          <Globe className="w-3.5 h-3.5 mr-1.5" /> Portfolio <ExternalLink className="w-3 h-3 ml-1 opacity-60" />
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Technical Skills */}
+                <div className="space-y-2">
+                  <h4 className="font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                    Technical Skills ({candProfile?.skills?.length || 0})
+                  </h4>
+                  {candProfile?.skills && candProfile.skills.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {candProfile.skills.map((skill, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2.5 py-1 rounded-lg font-medium bg-neutral-100 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200 border border-neutral-200 dark:border-neutral-700"
+                        >
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-neutral-400">No skills added yet.</p>
+                  )}
+                </div>
+
+                {/* Work Experience */}
+                {candProfile?.experience && candProfile.experience.length > 0 && (
+                  <div className="space-y-2.5">
+                    <h4 className="font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                      Work Experience ({candProfile.experience.length})
+                    </h4>
+                    <div className="space-y-2.5">
+                      {candProfile.experience.map((exp, idx) => (
+                        <div
+                          key={exp.id || idx}
+                          className="p-4 rounded-2xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 space-y-1"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-bold text-neutral-900 dark:text-white text-sm">
+                              {exp.role} {exp.company ? `• ${exp.company}` : ''}
+                            </span>
+                            <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                              {exp.startDate} – {exp.current ? 'Present' : exp.endDate}
+                              {exp.location ? ` • ${exp.location}` : ''}
+                            </span>
+                          </div>
+                          {exp.description && (
+                            <p className="text-neutral-600 dark:text-neutral-300 leading-relaxed pt-1">
+                              {exp.description}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Education */}
+                {candProfile?.education && candProfile.education.length > 0 && (
+                  <div className="space-y-2.5">
+                    <h4 className="font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">
+                      Education &amp; Degrees ({candProfile.education.length})
+                    </h4>
+                    <div className="space-y-2">
+                      {candProfile.education.map((edu, idx) => (
+                        <div
+                          key={edu.id || idx}
+                          className="p-3.5 rounded-2xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 flex flex-wrap items-center justify-between gap-2"
+                        >
+                          <div>
+                            <div className="font-bold text-neutral-900 dark:text-white">
+                              {edu.degree} {edu.fieldOfStudy ? `in ${edu.fieldOfStudy}` : ''}
+                            </div>
+                            <div className="text-neutral-500 dark:text-neutral-400">{edu.institution}</div>
+                          </div>
+                          <div className="text-right text-neutral-500 dark:text-neutral-400">
+                            <div>
+                              {edu.startYear ? `${edu.startYear} – ` : ''}
+                              {edu.endYear}
+                            </div>
+                            {edu.gpa && <div className="font-semibold">GPA: {edu.gpa}</div>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Projects */}
+                {candProfile?.projects && candProfile.projects.length > 0 && (
+                  <div className="space-y-2.5">
+                    <h4 className="font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 flex items-center space-x-1.5">
+                      <Code2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Projects ({candProfile.projects.length})</span>
+                    </h4>
+                    <div className="space-y-2.5">
+                      {candProfile.projects.map((proj, idx) => (
+                        <div
+                          key={proj.id || idx}
+                          className="p-4 rounded-2xl bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700 space-y-1.5"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-neutral-900 dark:text-white">{proj.title}</span>
+                            {proj.link && (
+                              <a
+                                href={proj.link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center text-emerald-700 dark:text-emerald-400 hover:underline font-semibold"
+                              >
+                                View <ExternalLink className="w-3 h-3 ml-1" />
+                              </a>
+                            )}
+                          </div>
+                          {proj.description && (
+                            <p className="text-neutral-600 dark:text-neutral-300 leading-relaxed">{proj.description}</p>
+                          )}
+                          {proj.technologies && proj.technologies.length > 0 && (
+                            <div className="flex flex-wrap gap-1 pt-1">
+                              {proj.technologies.map((tech, tIdx) => (
+                                <span
+                                  key={tIdx}
+                                  className="px-2 py-0.5 rounded bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-[10px] font-medium text-neutral-700 dark:text-neutral-300"
+                                >
+                                  {tech}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Certifications */}
+                {candProfile?.certifications && candProfile.certifications.length > 0 && (
+                  <div className="space-y-2">
+                    <h4 className="font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 flex items-center space-x-1.5">
+                      <Award className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Certifications ({candProfile.certifications.length})</span>
+                    </h4>
+                    <div className="flex flex-wrap gap-2">
+                      {candProfile.certifications.map((cert, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2.5 py-1 rounded-lg font-medium bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"
+                        >
+                          {cert}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Attached Resume & Raw Text */}
+                {(candProfile?.resumeFileName || candProfile?.resumeRawText || profileDetailApp.resumeFileName) && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 flex items-center space-x-1.5">
+                        <FileText className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                        <span>Attached Resume</span>
+                      </h4>
+                      <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300">
+                        {candProfile?.resumeFileName || profileDetailApp.resumeFileName}
+                      </span>
+                    </div>
+                    {candProfile?.resumeRawText && (
+                      <pre className="p-4 rounded-2xl bg-neutral-50 dark:bg-neutral-800/70 border border-neutral-200 dark:border-neutral-700 text-[11px] font-mono text-neutral-700 dark:text-neutral-300 whitespace-pre-wrap max-h-60 overflow-y-auto leading-relaxed">
+                        {candProfile.resumeRawText}
+                      </pre>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-4 border-t border-neutral-100 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 flex items-center justify-between">
+                <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                  Live profile view synced with candidate&apos;s User Profile &amp; My Resume
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setProfileDetailApp(null)}
+                  className="px-4 py-2 text-xs font-semibold rounded-xl bg-neutral-900 dark:bg-neutral-800 text-white hover:bg-neutral-800 transition-colors cursor-pointer"
+                >
+                  Close Profile
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
