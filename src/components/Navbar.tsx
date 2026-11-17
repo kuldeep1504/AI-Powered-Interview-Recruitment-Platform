@@ -61,14 +61,30 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div
               role="button"
               tabIndex={0}
-              onClick={() => window.location.reload()}
+              onClick={() => {
+                setActiveTab(
+                  currentUser.role === 'recruiter'
+                    ? 'recruiter-dashboard'
+                    : currentUser.role === 'admin'
+                      ? 'admin-dashboard'
+                      : 'candidate-dashboard'
+                );
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
-                  window.location.reload();
+                  setActiveTab(
+                    currentUser.role === 'recruiter'
+                      ? 'recruiter-dashboard'
+                      : currentUser.role === 'admin'
+                        ? 'admin-dashboard'
+                        : 'candidate-dashboard'
+                  );
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
                 }
               }}
-              title="Reload page"
+              title="Go to Dashboard"
               className="flex items-center space-x-2.5 shrink-0 cursor-pointer select-none group rounded-xl p-1 -m-1 hover:opacity-90 transition-opacity"
             >
               <div className="w-8 h-8 rounded-xl bg-neutral-900 dark:bg-neutral-800 text-white flex items-center justify-center shadow-xs border border-neutral-800 dark:border-neutral-700 group-hover:border-emerald-500/50 transition-colors">

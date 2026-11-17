@@ -70,7 +70,6 @@ function setSessionCookie(req: express.Request, res: express.Response, userId: s
     sameSite: isHttps ? 'none' : 'lax',
     secure: isHttps,
     path: '/',
-    maxAge: 7 * 24 * 60 * 60 * 1000,
   });
 }
 

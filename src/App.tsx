@@ -107,11 +107,27 @@ export default function App() {
     return resolvedProfile;
   };
 
-  // Restore existing explicit session only if a valid token is stored; never auto-login
+  const resetClientSession = () => {
+    clearAuthToken();
+    setCurrentUser(null);
+    setCandidateProfile(null);
+    setJobs([]);
+    setApplications([]);
+    setInterviews([]);
+    setActiveInterviewRoom(null);
+    setActiveReportResult(null);
+    setIsAuthModalOpen(false);
+    setIsATSModalOpen(false);
+    setIsOnboardingOpen(false);
+    setIsSRSModalOpen(false);
+  };
+
+  // Never auto-login across app exits; clear any stale server cookie on fresh mount
   useEffect(() => {
-    async function restoreSession() {
+    async function initializeSession() {
       const token = getAuthToken();
       if (!token) {
+        fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
         setLoadingInitial(false);
         return;
       }
@@ -147,8 +163,48 @@ export default function App() {
       }
     }
 
-    restoreSession();
+    initializeSession();
   }, []);
+
+  // Automatically sign out when user exits the web app (tab close, browser close, or navigating away)
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let exitHandled = false;
+
+    const handleExitSignOut = () => {
+      if (exitHandled) return;
+      exitHandled = true;
+
+      clearAuthToken();
+      if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+        navigator.sendBeacon('/api/auth/logout');
+      } else {
+        fetch('/api/auth/logout', {
+          method: 'POST',
+          keepalive: true,
+          credentials: 'same-origin',
+        }).catch(() => {});
+      }
+      resetClientSession();
+    };
+
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted || !getAuthToken()) {
+        resetClientSession();
+      }
+    };
+
+    window.addEventListener('pagehide', handleExitSignOut);
+    window.addEventListener('beforeunload', handleExitSignOut);
+    window.addEventListener('pageshow', handlePageShow);
+
+    return () => {
+      window.removeEventListener('pagehide', handleExitSignOut);
+      window.removeEventListener('beforeunload', handleExitSignOut);
+      window.removeEventListener('pageshow', handlePageShow);
+    };
+  }, [currentUser]);
 
   // Keep recruiter pipeline & scheduled interviews synced with latest candidate profile updates when switching tabs
   useEffect(() => {
@@ -629,22 +685,11 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
     } catch {
       // Ignore network errors on logout
     }
-    clearAuthToken();
-    setCurrentUser(null);
-    setCandidateProfile(null);
-    setJobs([]);
-    setApplications([]);
-    setInterviews([]);
-    setActiveInterviewRoom(null);
-    setActiveReportResult(null);
-    setIsAuthModalOpen(false);
-    setIsATSModalOpen(false);
-    setIsOnboardingOpen(false);
-    setIsSRSModalOpen(false);
+    resetClientSession();
   };
 
   const handleApplyCorrectedResume = async (correctedText: string) => {
