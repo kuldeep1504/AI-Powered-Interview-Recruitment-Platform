@@ -22,15 +22,38 @@ import { CandidateDashboard } from './components/CandidateDashboard.tsx';
 import { CandidateOnboardingForm } from './components/CandidateOnboardingForm.tsx';
 import { JobBoard } from './components/JobBoard.tsx';
 import { CandidateProfileView } from './components/CandidateProfileView.tsx';
+import { UserProfileView } from './components/UserProfileView.tsx';
 import { RecruiterDashboard } from './components/RecruiterDashboard.tsx';
 import { RecruiterJobManager } from './components/RecruiterJobManager.tsx';
 import { AdminDashboard } from './components/AdminDashboard.tsx';
 import { InterviewRoom } from './components/InterviewRoom.tsx';
 import { InterviewReportModal } from './components/InterviewReportModal.tsx';
 import { AuthModal } from './components/AuthModal.tsx';
+import { LoginPage } from './components/LoginPage.tsx';
 import { ATSResumeCheckerModal } from './components/ATSResumeCheckerModal.tsx';
 import { SRSModal } from './components/SRSModal.tsx';
+import { getAuthToken, setAuthToken, clearAuthToken } from './utils/authToken.ts';
 import { Loader2, Sparkles, BrainCircuit, ShieldAlert, BookOpen } from 'lucide-react';
+
+function buildFallbackCandidateProfile(user: User): CandidateProfile {
+  return {
+    id: `cand-${user.id}`,
+    userId: user.id,
+    headline: 'Candidate',
+    bio: '',
+    location: '',
+    phone: '',
+    yearsOfExperience: 0,
+    education: [],
+    skills: [],
+    experience: [],
+    projects: [],
+    certifications: [],
+    links: {},
+    onboardingCompleted: false,
+    updatedAt: new Date().toISOString(),
+  };
+}
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -49,80 +72,107 @@ export default function App() {
   const [isSRSModalOpen, setIsSRSModalOpen] = useState<boolean>(false);
   const [loadingInitial, setLoadingInitial] = useState(true);
 
-  // Initialize data from server
+  const loadWorkspaceData = async (
+    explicitToken?: string,
+    userForFallback?: User
+  ): Promise<CandidateProfile | null> => {
+    const token = explicitToken || getAuthToken();
+    const requestInit: RequestInit | undefined = token
+      ? { headers: { Authorization: `Bearer ${token}` } }
+      : undefined;
+
+    const [profRes, jobsRes, appsRes, intRes] = await Promise.all([
+      fetch('/api/candidates/profile', requestInit),
+      fetch('/api/jobs', requestInit),
+      fetch('/api/applications', requestInit),
+      fetch('/api/interviews', requestInit),
+    ]);
+
+    const profData = profRes.ok ? await profRes.json() : { profile: null };
+    const jobsData = jobsRes.ok ? await jobsRes.json() : { jobs: [] };
+    const appsData = appsRes.ok ? await appsRes.json() : { applications: [] };
+    const intData = intRes.ok ? await intRes.json() : { interviews: [] };
+
+    let resolvedProfile: CandidateProfile | null = profData.profile || null;
+    if (!resolvedProfile && userForFallback?.role === 'candidate') {
+      resolvedProfile = buildFallbackCandidateProfile(userForFallback);
+    }
+
+    if (resolvedProfile) {
+      setCandidateProfile(resolvedProfile);
+    }
+    setJobs(jobsData.jobs || []);
+    setApplications(appsData.applications || []);
+    setInterviews(intData.interviews || []);
+    return resolvedProfile;
+  };
+
+  // Restore existing explicit session only if a valid token is stored; never auto-login
   useEffect(() => {
-    async function loadBootstrapData() {
+    async function restoreSession() {
+      const token = getAuthToken();
+      if (!token) {
+        setLoadingInitial(false);
+        return;
+      }
+
       try {
-        const [meRes, profRes, jobsRes, appsRes, intRes] = await Promise.all([
-          fetch('/api/auth/me'),
-          fetch('/api/candidates/profile'),
-          fetch('/api/jobs'),
-          fetch('/api/applications'),
-          fetch('/api/interviews'),
-        ]);
-
+        const meRes = await fetch('/api/auth/me', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
         const meData = await meRes.json();
-        const profData = await profRes.json();
-        const jobsData = await jobsRes.json();
-        const appsData = await appsRes.json();
-        const intData = await intRes.json();
 
-        setCurrentUser(meData.user);
-        setCandidateProfile(profData.profile);
-        setJobs(jobsData.jobs || []);
-        setApplications(appsData.applications || []);
-        setInterviews(intData.interviews || []);
+        if (!meData.user) {
+          clearAuthToken();
+          setLoadingInitial(false);
+          return;
+        }
+
+        const user: User = meData.user;
+        setCurrentUser(user);
+        if (user.role === 'recruiter') {
+          setActiveTab('recruiter-dashboard');
+        } else if (user.role === 'admin') {
+          setActiveTab('admin-dashboard');
+        } else {
+          setActiveTab('candidate-dashboard');
+        }
+
+        await loadWorkspaceData(token, user);
       } catch (err) {
-        console.error('Bootstrap data load error:', err);
+        console.error('Session restore error:', err);
+        clearAuthToken();
       } finally {
         setLoadingInitial(false);
       }
     }
 
-    loadBootstrapData();
+    restoreSession();
   }, []);
 
-  // Handle switching user role (Candidate, Recruiter, Admin)
-  const handleSwitchRole = (role: UserRole) => {
+  // Handle switching user role (Candidate, Recruiter, Admin) using real backend login
+  const handleSwitchRole = async (role: UserRole) => {
     if (!currentUser) return;
-    let updatedUser: User;
+    const demoEmail =
+      role === 'recruiter'
+        ? 'sarah.lin@cloudscale.ai'
+        : role === 'admin'
+          ? 'admin@platform.internal'
+          : 'alex.rivera@example.com';
 
-    if (role === 'candidate') {
-      updatedUser = {
-        id: 'usr-1',
-        name: 'Alex Rivera',
-        email: 'alex.rivera@example.com',
-        role: 'candidate',
-        status: 'active',
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-        createdAt: new Date().toISOString(),
-      };
-      setActiveTab('candidate-dashboard');
-    } else if (role === 'recruiter') {
-      updatedUser = {
-        id: 'usr-2',
-        name: 'Sarah Lin',
-        email: 'sarah.lin@cloudscale.ai',
-        role: 'recruiter',
-        status: 'active',
-        avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150',
-        createdAt: new Date().toISOString(),
-      };
-      setActiveTab('recruiter-dashboard');
-    } else {
-      updatedUser = {
-        id: 'usr-3',
-        name: 'Marcus Vance',
-        email: 'marcus.admin@talentpulse.ai',
-        role: 'admin',
-        status: 'active',
-        avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
-        createdAt: new Date().toISOString(),
-      };
-      setActiveTab('admin-dashboard');
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: demoEmail, isDemo: true }),
+      });
+      const data = await res.json();
+      if (res.ok && data.user && data.token) {
+        await handleLoginSuccess(data.user, data.token, false, data.profile);
+      }
+    } catch (err) {
+      console.error('Error switching role:', err);
     }
-
-    setCurrentUser(updatedUser);
   };
 
   // Quick Open Live Interview Room
@@ -224,24 +274,35 @@ export default function App() {
     fresherData?: FresherDetails,
     expData?: ExperiencedDetails
   ) => {
-    try {
-      const res = await fetch('/api/candidates/onboarding', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          experienceTrack: track,
-          fresherDetails: fresherData,
-          experiencedDetails: expData,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setCandidateProfile(data.profile);
-        setIsOnboardingOpen(false);
-      }
-    } catch (err) {
-      console.error('Failed to save candidate track onboarding:', err);
+    const token = getAuthToken();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
     }
+
+    const res = await fetch('/api/candidates/onboarding', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        experienceTrack: track,
+        fresherDetails: fresherData,
+        experiencedDetails: expData,
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 401) {
+        throw new Error('Your session expired. Please sign out and sign in again.');
+      }
+      throw new Error(data.error || 'Failed to save your career track calibration.');
+    }
+
+    if (data.profile) {
+      setCandidateProfile(data.profile);
+    }
+    setActiveTab('candidate-dashboard');
+    setIsOnboardingOpen(false);
   };
 
   const handleStartTrackMockInterview = (track: 'fresher' | 'experienced', focusArea?: string) => {
@@ -497,28 +558,61 @@ export default function App() {
     setActiveInterviewRoom(newInterview);
   };
 
-  const handleLoginSuccess = async (user: User, isSignUp?: boolean) => {
-    setCurrentUser(user);
+  const handleLoginSuccess = async (
+    user: User,
+    token: string,
+    isSignUp?: boolean,
+    initialProfile?: CandidateProfile | null
+  ) => {
+    setAuthToken(token);
+
     if (user.role === 'candidate') {
       setActiveTab('candidate-dashboard');
-      try {
-        const profRes = await fetch('/api/candidates/profile');
-        const profData = await profRes.json();
-        if (profData.profile) {
-          setCandidateProfile(profData.profile);
-          // If the candidate just signed up or has not completed onboarding, pop up the onboarding form!
-          if (isSignUp || !profData.profile.onboardingCompleted) {
-            setIsOnboardingOpen(true);
-          }
-        }
-      } catch (e) {
-        console.error('Error fetching profile after login:', e);
+      if (initialProfile) {
+        setCandidateProfile(initialProfile);
+      } else {
+        setCandidateProfile(buildFallbackCandidateProfile(user));
       }
     } else if (user.role === 'recruiter') {
       setActiveTab('recruiter-dashboard');
     } else if (user.role === 'admin') {
       setActiveTab('admin-dashboard');
     }
+
+    setCurrentUser(user);
+
+    try {
+      const profile = await loadWorkspaceData(token, user);
+      const effectiveProfile = profile || initialProfile || null;
+      if (user.role === 'candidate' && effectiveProfile && (isSignUp || !effectiveProfile.onboardingCompleted)) {
+        setIsOnboardingOpen(true);
+      }
+    } catch (e) {
+      console.error('Error loading workspace after login:', e);
+      if (user.role === 'candidate' && initialProfile && (isSignUp || !initialProfile.onboardingCompleted)) {
+        setIsOnboardingOpen(true);
+      }
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Ignore network errors on logout
+    }
+    clearAuthToken();
+    setCurrentUser(null);
+    setCandidateProfile(null);
+    setJobs([]);
+    setApplications([]);
+    setInterviews([]);
+    setActiveInterviewRoom(null);
+    setActiveReportResult(null);
+    setIsAuthModalOpen(false);
+    setIsATSModalOpen(false);
+    setIsOnboardingOpen(false);
+    setIsSRSModalOpen(false);
   };
 
   const handleApplyCorrectedResume = async (correctedText: string) => {
@@ -529,7 +623,9 @@ export default function App() {
         body: JSON.stringify({ text: correctedText }),
       });
       const data = await res.json();
-      if (data.parsed && candidateProfile) {
+      const baseProfile =
+        candidateProfile || (currentUser ? buildFallbackCandidateProfile(currentUser) : null);
+      if (data.parsed && baseProfile) {
         const parsed = data.parsed;
         const flatSkills = [
           ...(parsed.skills?.languages || []),
@@ -537,14 +633,15 @@ export default function App() {
           ...(parsed.skills?.toolsAndDatabases || []),
         ];
         const updatedProfile: CandidateProfile = {
-          ...candidateProfile,
-          headline: parsed.headline || candidateProfile.headline,
-          bio: parsed.summary || candidateProfile.bio,
-          yearsOfExperience: parsed.yearsOfExperience || candidateProfile.yearsOfExperience,
+          ...baseProfile,
+          headline: parsed.headline || baseProfile.headline,
+          bio: parsed.summary || baseProfile.bio,
+          yearsOfExperience: parsed.yearsOfExperience || baseProfile.yearsOfExperience,
+          resumeRawText: correctedText,
           parsedResumeData: parsed,
-          skills: Array.from(new Set([...candidateProfile.skills, ...flatSkills])),
-          education: parsed.education?.length ? parsed.education : candidateProfile.education,
-          experience: parsed.experience?.length ? parsed.experience : candidateProfile.experience,
+          skills: Array.from(new Set([...baseProfile.skills, ...flatSkills])),
+          education: parsed.education?.length ? parsed.education : baseProfile.education,
+          experience: parsed.experience?.length ? parsed.experience : baseProfile.experience,
           updatedAt: new Date().toISOString(),
         };
         setCandidateProfile(updatedProfile);
@@ -560,7 +657,7 @@ export default function App() {
     }
   };
 
-  if (loadingInitial || !currentUser || !candidateProfile) {
+  if (loadingInitial) {
     return (
       <div className="min-h-screen bg-neutral-900 flex flex-col items-center justify-center text-white space-y-4">
         <div className="w-12 h-12 rounded-2xl bg-neutral-800 border border-neutral-700 flex items-center justify-center">
@@ -572,6 +669,22 @@ export default function App() {
     );
   }
 
+  // Gate the entire app behind LoginPage until user explicitly logs in
+  if (!currentUser) {
+    return (
+      <>
+        <LoginPage
+          onLoginSuccess={handleLoginSuccess}
+          onOpenSRSModal={() => setIsSRSModalOpen(true)}
+        />
+        <SRSModal isOpen={isSRSModalOpen} onClose={() => setIsSRSModalOpen(false)} />
+      </>
+    );
+  }
+
+  const effectiveCandidateProfile =
+    candidateProfile || (currentUser.role === 'candidate' ? buildFallbackCandidateProfile(currentUser) : null);
+
   return (
     <div className="min-h-screen bg-neutral-100/70 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 font-sans flex flex-col transition-colors duration-200">
       {/* Top Navigation */}
@@ -581,19 +694,19 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onOpenInterviewQuick={handleOpenInterviewQuick}
-        onOpenATSModal={() => setIsATSModalOpen(true)}
         onOpenAuthModal={() => setIsAuthModalOpen(true)}
-        onOpenSRSModal={() => setIsSRSModalOpen(true)}
+        onLogout={handleLogout}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Candidate Views */}
-        {currentUser.role === 'candidate' && (
+        {currentUser.role === 'candidate' && effectiveCandidateProfile && (
           <>
             {activeTab === 'candidate-dashboard' && (
               <CandidateDashboard
-                profile={candidateProfile}
+                currentUser={currentUser}
+                profile={effectiveCandidateProfile}
                 applications={applications}
                 interviews={interviews}
                 jobs={jobs}
@@ -609,7 +722,7 @@ export default function App() {
             {activeTab === 'job-board' && (
               <JobBoard
                 jobs={jobs}
-                candidateProfile={candidateProfile}
+                candidateProfile={effectiveCandidateProfile}
                 applications={applications}
                 onApplySuccess={(newApp) => setApplications([newApp, ...applications])}
                 onOpenInterviewRoom={(jobId) => handleOpenInterviewQuick()}
@@ -618,9 +731,18 @@ export default function App() {
 
             {activeTab === 'candidate-profile' && (
               <CandidateProfileView
-                profile={candidateProfile}
+                profile={effectiveCandidateProfile}
                 onUpdateProfile={(updated) => setCandidateProfile(updated)}
                 onOpenATSModal={() => setIsATSModalOpen(true)}
+              />
+            )}
+
+            {activeTab === 'user-profile' && (
+              <UserProfileView
+                currentUser={currentUser}
+                onUpdateUser={(updatedUser) => setCurrentUser(updatedUser)}
+                candidateProfile={effectiveCandidateProfile}
+                onUpdateCandidateProfile={(updated) => setCandidateProfile(updated)}
               />
             )}
           </>
@@ -655,11 +777,26 @@ export default function App() {
                 onJobDeleted={(jobId) => setJobs(jobs.filter((j) => j.id !== jobId))}
               />
             )}
+
+            {activeTab === 'user-profile' && (
+              <UserProfileView
+                currentUser={currentUser}
+                onUpdateUser={(updatedUser) => setCurrentUser(updatedUser)}
+              />
+            )}
           </>
         )}
 
         {/* Admin Views */}
-        {currentUser.role === 'admin' && <AdminDashboard currentUser={currentUser} />}
+        {currentUser.role === 'admin' &&
+          (activeTab === 'user-profile' ? (
+            <UserProfileView
+              currentUser={currentUser}
+              onUpdateUser={(updatedUser) => setCurrentUser(updatedUser)}
+            />
+          ) : (
+            <AdminDashboard currentUser={currentUser} />
+          ))}
       </main>
 
       {/* Footer */}
@@ -724,40 +861,42 @@ export default function App() {
       <ATSResumeCheckerModal
         isOpen={isATSModalOpen}
         onClose={() => setIsATSModalOpen(false)}
-        candidateProfile={candidateProfile}
+        candidateProfile={effectiveCandidateProfile}
         initialResumeText={
-          candidateProfile?.parsedResumeData
-            ? `${candidateProfile.parsedResumeData.name || 'Alex Rivera'}
-${candidateProfile.parsedResumeData.email || 'alex.rivera@example.com'} | ${candidateProfile.parsedResumeData.phone || '(555) 234-5678'}
+          effectiveCandidateProfile?.resumeRawText?.trim()
+            ? effectiveCandidateProfile.resumeRawText
+            : effectiveCandidateProfile?.parsedResumeData
+              ? `${effectiveCandidateProfile.parsedResumeData.name || currentUser.name}
+${effectiveCandidateProfile.parsedResumeData.email || currentUser.email} | ${effectiveCandidateProfile.parsedResumeData.phone || effectiveCandidateProfile.phone || ''}
 
 SUMMARY
-${candidateProfile.bio || candidateProfile.headline}
+${effectiveCandidateProfile.bio || effectiveCandidateProfile.headline}
 
 EXPERIENCE
-${candidateProfile.experience
+${effectiveCandidateProfile.experience
   .map(
     (exp) =>
-      `${exp.company} — ${exp.title} (${exp.startDate} - ${exp.endDate || 'Present'})
+      `${exp.company} — ${exp.role} (${exp.startDate} - ${exp.endDate || 'Present'})
 ${exp.description || ''}`
   )
   .join('\n\n')}
 
 SKILLS
-${candidateProfile.skills.join(', ')}
+${effectiveCandidateProfile.skills.join(', ')}
 
 EDUCATION
-${candidateProfile.education.map((edu) => `${edu.degree} in ${edu.field} — ${edu.institution} (${edu.endYear || ''})`).join('\n')}`
-            : undefined
+${effectiveCandidateProfile.education.map((edu) => `${edu.degree} in ${edu.fieldOfStudy} — ${edu.institution} (${edu.endYear || ''})`).join('\n')}`
+              : undefined
         }
         onApplyCorrectedProfile={handleApplyCorrectedResume}
       />
 
       {/* Candidate Track Onboarding & Calibration Modal */}
-      {isOnboardingOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-neutral-950/80 backdrop-blur-sm p-4 sm:p-6 md:p-10 flex items-center justify-center animate-in fade-in duration-200">
+      {isOnboardingOpen && effectiveCandidateProfile && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-neutral-950/80 backdrop-blur-sm p-4 sm:p-6 md:p-10 flex justify-center animate-in fade-in duration-200">
           <div className="w-full max-w-4xl bg-white dark:bg-neutral-900 rounded-3xl shadow-2xl border border-neutral-200 dark:border-neutral-800 overflow-hidden my-auto animate-in zoom-in-95 duration-200">
             <CandidateOnboardingForm
-              initialProfile={candidateProfile}
+              initialProfile={effectiveCandidateProfile}
               onSaveOnboarding={handleSaveOnboarding}
               onCancel={() => setIsOnboardingOpen(false)}
             />

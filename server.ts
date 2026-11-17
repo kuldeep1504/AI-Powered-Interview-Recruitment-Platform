@@ -1,7 +1,10 @@
+import 'dotenv/config';
+import crypto from 'crypto';
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { db } from './server/db.ts';
+import { isMongoConnected } from './server/mongodb.ts';
 import {
   parseResumeWithAI,
   analyzeJobWithAI,
@@ -13,7 +16,85 @@ import {
   correctAndOptimizeResumeWithAI,
   extractTextFromFileWithAI,
 } from './server/gemini.ts';
-import { Job, CandidateProfile, Application, Interview, InterviewResult } from './src/types.ts';
+import { Job, CandidateProfile, Application, Interview, InterviewResult, User } from './src/types.ts';
+
+const DEMO_EMAILS = new Set([
+  'alex.rivera@example.com',
+  'sarah.lin@cloudscale.ai',
+  'admin@platform.internal',
+  'priya.sharma@example.com',
+  'david.chen@example.com',
+]);
+
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+function verifyPassword(password: string, storedHash?: string): boolean {
+  if (!storedHash) {
+    // Seeded demo accounts default to 'demo1234' when no hash is stored
+    return password === 'demo1234';
+  }
+  const [salt, key] = storedHash.split(':');
+  if (!salt || !key) return false;
+  const derived = crypto.scryptSync(password, salt, 64);
+  const keyBuf = Buffer.from(key, 'hex');
+  if (derived.length !== keyBuf.length) return false;
+  return crypto.timingSafeEqual(derived, keyBuf);
+}
+
+function sanitizeUser(user: User & { passwordHash?: string }): User {
+  const { passwordHash: _removed, ...cleanUser } = user;
+  return cleanUser;
+}
+
+function parseCookies(cookieHeader?: string): Record<string, string> {
+  if (!cookieHeader) return {};
+  return cookieHeader.split(';').reduce<Record<string, string>>((acc, part) => {
+    const idx = part.indexOf('=');
+    if (idx > -1) {
+      const k = part.slice(0, idx).trim();
+      const v = decodeURIComponent(part.slice(idx + 1).trim());
+      acc[k] = v;
+    }
+    return acc;
+  }, {});
+}
+
+function setSessionCookie(req: express.Request, res: express.Response, userId: string) {
+  const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.cookie('talentpulse_token', userId, {
+    httpOnly: true,
+    sameSite: isHttps ? 'none' : 'lax',
+    secure: isHttps,
+    path: '/',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  });
+}
+
+function ensureCandidateProfile(userId: string): CandidateProfile {
+  const existing = db.getCandidateByUserId(userId);
+  if (existing) return existing;
+  return db.upsertCandidate({
+    id: `cand-${Date.now()}`,
+    userId,
+    headline: 'Candidate',
+    bio: '',
+    location: '',
+    phone: '',
+    yearsOfExperience: 0,
+    education: [],
+    skills: [],
+    experience: [],
+    projects: [],
+    certifications: [],
+    links: {},
+    onboardingCompleted: false,
+    updatedAt: new Date().toISOString(),
+  });
+}
 
 async function startServer() {
   const app = express();
@@ -21,23 +102,36 @@ async function startServer() {
 
   app.use(express.json({ limit: '15mb' }));
 
-  // Helper middleware for session/role simulation
+  // Session authentication middleware (requires explicit token/cookie — no auto-login)
   app.use((req, res, next) => {
-    // Check Authorization header or default to first user
     const authHeader = req.headers.authorization;
+    const cookies = parseCookies(req.headers.cookie);
+    let token: string | undefined;
+
     if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.replace('Bearer ', '').trim();
+      token = authHeader.replace('Bearer ', '').trim();
+    } else if (cookies.talentpulse_token) {
+      token = cookies.talentpulse_token;
+    }
+
+    if (token) {
       const user = db.getUserById(token) || db.getUserByEmail(token);
-      if (user) {
+      if (user && user.status !== 'suspended') {
         (req as any).currentUser = user;
       }
     }
     next();
   });
 
+  const requireAuth: express.RequestHandler = (req, res, next) => {
+    if (!(req as any).currentUser) {
+      return res.status(401).json({ error: 'Authentication required. Please log in first.' });
+    }
+    next();
+  };
+
   // Health check & Database Status
   app.get('/api/health', (req, res) => {
-    const { isMongoConnected } = require('./server/mongodb.ts');
     res.json({
       status: 'ok',
       database: {
@@ -52,8 +146,11 @@ async function startServer() {
   // ---------------- AUTH API ----------------
   app.post('/api/auth/register', (req, res) => {
     const { name, email, role, password } = req.body;
-    if (!name || !email || !role) {
-      return res.status(400).json({ error: 'Name, email, and role are required.' });
+    if (!name || !email || !role || !password) {
+      return res.status(400).json({ error: 'Name, email, password, and role are required.' });
+    }
+    if (String(password).length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
     }
     const existing = db.getUserByEmail(email);
     if (existing) {
@@ -62,32 +159,18 @@ async function startServer() {
 
     const newUser = db.createUser({
       id: `usr-${Date.now()}`,
-      name,
-      email,
+      name: String(name).trim(),
+      email: String(email).trim().toLowerCase(),
       role: role === 'recruiter' ? 'recruiter' : role === 'admin' ? 'admin' : 'candidate',
       status: 'active',
       avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}`,
       createdAt: new Date().toISOString(),
-    });
+      passwordHash: hashPassword(String(password)),
+    } as User & { passwordHash: string });
 
+    let profile: CandidateProfile | null = null;
     if (newUser.role === 'candidate') {
-      db.upsertCandidate({
-        id: `cand-${Date.now()}`,
-        userId: newUser.id,
-        headline: 'Candidate',
-        bio: '',
-        location: '',
-        phone: '',
-        yearsOfExperience: 0,
-        education: [],
-        skills: [],
-        experience: [],
-        projects: [],
-        certifications: [],
-        links: {},
-        onboardingCompleted: false,
-        updatedAt: new Date().toISOString(),
-      });
+      profile = ensureCandidateProfile(newUser.id);
     } else if (newUser.role === 'recruiter') {
       db.upsertRecruiter({
         id: `rec-${Date.now()}`,
@@ -105,153 +188,308 @@ async function startServer() {
       });
     }
 
-    res.status(201).json({ user: newUser, token: newUser.id });
+    setSessionCookie(req, res, newUser.id);
+    res.status(201).json({ user: sanitizeUser(newUser), token: newUser.id, profile });
   });
 
   app.post('/api/auth/login', (req, res) => {
-    const { email } = req.body;
+    const { email, password, isDemo } = req.body;
     if (!email) {
       return res.status(400).json({ error: 'Email is required.' });
     }
-    const user = db.getUserByEmail(email);
+    const user = db.getUserByEmail(String(email).trim()) as (User & { passwordHash?: string }) | undefined;
     if (!user) {
-      return res.status(404).json({ error: 'User not found with that email address.' });
+      return res.status(401).json({ error: 'Invalid email or password.' });
     }
-    res.json({ user, token: user.id });
+    if (user.status === 'suspended') {
+      return res.status(403).json({ error: 'This account has been suspended.' });
+    }
+
+    const isAllowedDemo = Boolean(isDemo) && DEMO_EMAILS.has(user.email.toLowerCase());
+    if (!isAllowedDemo) {
+      if (!password || !verifyPassword(String(password), user.passwordHash)) {
+        return res.status(401).json({ error: 'Invalid email or password.' });
+      }
+    }
+
+    const profile = user.role === 'candidate' ? ensureCandidateProfile(user.id) : null;
+    setSessionCookie(req, res, user.id);
+    res.json({ user: sanitizeUser(user), token: user.id, profile });
   });
 
   app.get('/api/auth/me', (req, res) => {
-    const user = (req as any).currentUser || db.getUsers()[0];
-    res.json({ user });
+    const user = (req as any).currentUser;
+    if (!user) {
+      return res.json({ user: null });
+    }
+    res.json({ user: sanitizeUser(user) });
+  });
+
+  app.get('/api/auth/profile', requireAuth, (req, res) => {
+    const user = (req as any).currentUser as User;
+    const recruiterProfile = user.role === 'recruiter' ? db.getRecruiterByUserId(user.id) || null : null;
+    res.json({ user: sanitizeUser(user), recruiterProfile });
+  });
+
+  app.put('/api/auth/profile', requireAuth, (req, res) => {
+    try {
+      const user = (req as any).currentUser as User;
+      const { name, email, avatar, adminDetails, recruiterProfile } = req.body || {};
+
+      const updates: Partial<User> = {};
+      if (typeof name === 'string') {
+        const trimmedName = name.trim();
+        if (!trimmedName) {
+          return res.status(400).json({ error: 'Full name cannot be empty.' });
+        }
+        updates.name = trimmedName;
+      }
+
+      if (typeof email === 'string') {
+        const normalizedEmail = email.trim().toLowerCase();
+        if (!normalizedEmail || !normalizedEmail.includes('@')) {
+          return res.status(400).json({ error: 'Please provide a valid email address.' });
+        }
+        const existingWithEmail = db.getUserByEmail(normalizedEmail);
+        if (existingWithEmail && existingWithEmail.id !== user.id) {
+          return res.status(409).json({ error: 'Another account already uses this email address.' });
+        }
+        updates.email = normalizedEmail;
+      }
+
+      if (typeof avatar === 'string') {
+        updates.avatar = avatar.trim();
+      }
+
+      if (user.role === 'admin' && adminDetails && typeof adminDetails === 'object') {
+        updates.adminDetails = {
+          organization: String(adminDetails.organization || ''),
+          department: String(adminDetails.department || ''),
+          adminTitle: String(adminDetails.adminTitle || ''),
+          governanceScope: Array.isArray(adminDetails.governanceScope)
+            ? adminDetails.governanceScope.map(String)
+            : [],
+        };
+      }
+
+      const updatedUser = db.updateUser(user.id, updates) || user;
+
+      let updatedRecruiter = null;
+      if (user.role === 'recruiter') {
+        const existingRec = db.getRecruiterByUserId(user.id);
+        if (recruiterProfile && typeof recruiterProfile === 'object') {
+          updatedRecruiter = db.upsertRecruiter({
+            id: existingRec?.id || `rec-${Date.now()}`,
+            userId: user.id,
+            companyName: String(recruiterProfile.companyName || existingRec?.companyName || ''),
+            designation: String(recruiterProfile.designation || existingRec?.designation || ''),
+            companyDetails: {
+              industry: String(recruiterProfile.companyDetails?.industry || existingRec?.companyDetails?.industry || ''),
+              size: String(recruiterProfile.companyDetails?.size || existingRec?.companyDetails?.size || ''),
+              website: String(recruiterProfile.companyDetails?.website || existingRec?.companyDetails?.website || ''),
+              location: String(recruiterProfile.companyDetails?.location || existingRec?.companyDetails?.location || ''),
+              about: String(recruiterProfile.companyDetails?.about || existingRec?.companyDetails?.about || ''),
+              logo: recruiterProfile.companyDetails?.logo ?? existingRec?.companyDetails?.logo,
+            },
+            updatedAt: new Date().toISOString(),
+          });
+        } else {
+          updatedRecruiter = existingRec || null;
+        }
+      }
+
+      res.json({ user: sanitizeUser(updatedUser), recruiterProfile: updatedRecruiter });
+    } catch (err: any) {
+      console.error('Update user profile error:', err);
+      res.status(500).json({ error: err?.message || 'Failed to update account profile.' });
+    }
   });
 
   app.post('/api/auth/logout', (req, res) => {
+    const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+    res.clearCookie('talentpulse_token', {
+      path: '/',
+      sameSite: isHttps ? 'none' : 'lax',
+      secure: isHttps,
+    });
     res.json({ success: true, message: 'Logged out successfully' });
   });
 
   // ---------------- CANDIDATE API ----------------
-  app.get('/api/candidates/profile', (req, res) => {
-    const user = (req as any).currentUser || db.getUsers().find((u) => u.role === 'candidate');
-    if (!user) return res.status(404).json({ error: 'Candidate not found' });
+  app.get('/api/candidates/profile', requireAuth, (req, res) => {
+    const user = (req as any).currentUser;
     let profile = db.getCandidateByUserId(user.id);
-    if (!profile) {
-      profile = db.getCandidates()[0];
+    if (!profile && user.role !== 'candidate') {
+      return res.json({ profile: null, user: sanitizeUser(user) });
     }
-    res.json({ profile, user });
-  });
-
-  app.put('/api/candidates/profile', (req, res) => {
-    const user = (req as any).currentUser || db.getUsers().find((u) => u.role === 'candidate');
-    if (!user) return res.status(403).json({ error: 'Not authenticated' });
-    let existing = db.getCandidateByUserId(user.id);
-    const updated = db.upsertCandidate({
-      ...(existing || {
+    if (!profile) {
+      profile = db.upsertCandidate({
         id: `cand-${Date.now()}`,
         userId: user.id,
+        headline: 'Candidate',
+        bio: '',
+        location: '',
+        phone: '',
+        yearsOfExperience: 0,
         education: [],
         skills: [],
         experience: [],
         projects: [],
         certifications: [],
         links: {},
+        onboardingCompleted: false,
         updatedAt: new Date().toISOString(),
-      }),
-      ...req.body,
-      userId: user.id,
-    });
-    res.json({ profile: updated });
-  });
-
-  app.post('/api/candidates/onboarding', (req, res) => {
-    const user = (req as any).currentUser || db.getUsers().find((u) => u.role === 'candidate');
-    if (!user) return res.status(403).json({ error: 'Not authenticated' });
-    let existing = db.getCandidateByUserId(user.id);
-    const { experienceTrack, fresherDetails, experiencedDetails } = req.body;
-
-    const baseProfile: CandidateProfile = existing || {
-      id: `cand-${Date.now()}`,
-      userId: user.id,
-      headline: '',
-      bio: '',
-      location: '',
-      phone: '',
-      yearsOfExperience: 0,
-      education: [],
-      skills: [],
-      experience: [],
-      projects: [],
-      certifications: [],
-      links: {},
-      experienceTrack: 'fresher',
-      onboardingCompleted: false,
-      updatedAt: new Date().toISOString(),
-    };
-
-    let headline = baseProfile.headline;
-    let bio = baseProfile.bio;
-    let yearsOfExperience = baseProfile.yearsOfExperience;
-    let skills = [...baseProfile.skills];
-    let education = [...baseProfile.education];
-
-    if (experienceTrack === 'fresher' && fresherDetails) {
-      yearsOfExperience = 0;
-      headline = `${fresherDetails.targetRole || 'Aspiring Software Engineer'} | ${fresherDetails.degree || 'CS Graduate'} (${fresherDetails.graduationYear || '2025'})`;
-      bio = `Motivated graduate from ${fresherDetails.collegeName || 'University'} specializing in ${fresherDetails.fieldOfStudy || 'Computer Science'}. Preparing for entry-level tech roles with solid fundamentals in DSA, OOP, and modern software development.`;
-      if (fresherDetails.primarySkills && fresherDetails.primarySkills.length > 0) {
-        skills = Array.from(new Set([...skills, ...fresherDetails.primarySkills]));
-      }
-      if (fresherDetails.collegeName && education.length === 0) {
-        education.push({
-          id: `edu-${Date.now()}`,
-          institution: fresherDetails.collegeName,
-          degree: fresherDetails.degree || 'Bachelor of Science',
-          fieldOfStudy: fresherDetails.fieldOfStudy || 'Computer Science',
-          startYear: String(parseInt(fresherDetails.graduationYear || '2025') - 4),
-          endYear: fresherDetails.graduationYear || '2025',
-        });
-      }
-    } else if (experienceTrack === 'experienced' && experiencedDetails) {
-      yearsOfExperience = Number(experiencedDetails.totalYears) || 3;
-      headline = `${experiencedDetails.currentRole || 'Software Engineer'} | ${experiencedDetails.domain || 'Full-Stack'} (${yearsOfExperience}+ Years Experience)`;
-      bio = `${experiencedDetails.totalYears}+ years experienced professional at ${experiencedDetails.currentCompany || 'Tech'}. Specializing in ${experiencedDetails.domain || 'Software Engineering'} and targeting ${experiencedDetails.targetSeniority || 'Senior'} positions.`;
-      if (experiencedDetails.primaryTechStack && experiencedDetails.primaryTechStack.length > 0) {
-        skills = Array.from(new Set([...skills, ...experiencedDetails.primaryTechStack]));
-      }
+      });
     }
-
-    const updated = db.upsertCandidate({
-      ...baseProfile,
-      headline,
-      bio,
-      yearsOfExperience,
-      skills,
-      education,
-      experienceTrack,
-      fresherDetails: experienceTrack === 'fresher' ? fresherDetails : baseProfile.fresherDetails,
-      experiencedDetails: experienceTrack === 'experienced' ? experiencedDetails : baseProfile.experiencedDetails,
-      onboardingCompleted: true,
-      updatedAt: new Date().toISOString(),
-    });
-
-    res.json({ profile: updated });
+    res.json({ profile, user: sanitizeUser(user) });
   });
 
-  app.post('/api/candidates/resume', async (req, res) => {
+  app.put('/api/candidates/profile', requireAuth, (req, res) => {
+    try {
+      const user = (req as any).currentUser;
+      const existing = db.getCandidateByUserId(user.id);
+      const { id: _ignoreId, userId: _ignoreUserId, ...payload } = req.body || {};
+      const updated = db.upsertCandidate({
+        ...(existing || {
+          id: `cand-${Date.now()}`,
+          userId: user.id,
+          headline: 'Candidate',
+          bio: '',
+          location: '',
+          phone: '',
+          yearsOfExperience: 0,
+          education: [],
+          skills: [],
+          experience: [],
+          projects: [],
+          certifications: [],
+          links: {},
+          updatedAt: new Date().toISOString(),
+        }),
+        ...payload,
+        userId: user.id,
+      });
+      res.json({ profile: updated });
+    } catch (err: any) {
+      console.error('Update candidate profile error:', err);
+      res.status(500).json({ error: err?.message || 'Failed to update candidate profile.' });
+    }
+  });
+
+  app.post('/api/candidates/onboarding', requireAuth, (req, res) => {
+    try {
+      const user = (req as any).currentUser;
+      const existing = db.getCandidateByUserId(user.id);
+      const { experienceTrack, fresherDetails, experiencedDetails } = req.body || {};
+
+      if (experienceTrack !== 'fresher' && experienceTrack !== 'experienced') {
+        return res.status(400).json({ error: 'Invalid experience track selected.' });
+      }
+
+      const baseProfile: CandidateProfile = existing || {
+        id: `cand-${Date.now()}`,
+        userId: user.id,
+        headline: '',
+        bio: '',
+        location: '',
+        phone: '',
+        yearsOfExperience: 0,
+        education: [],
+        skills: [],
+        experience: [],
+        projects: [],
+        certifications: [],
+        links: {},
+        experienceTrack: 'fresher',
+        onboardingCompleted: false,
+        updatedAt: new Date().toISOString(),
+      };
+
+      let headline = baseProfile.headline || '';
+      let bio = baseProfile.bio || '';
+      let yearsOfExperience = baseProfile.yearsOfExperience || 0;
+      let skills = Array.isArray(baseProfile.skills) ? [...baseProfile.skills] : [];
+      const education = Array.isArray(baseProfile.education) ? [...baseProfile.education] : [];
+      const projects = Array.isArray(baseProfile.projects) ? [...baseProfile.projects] : [];
+
+      if (experienceTrack === 'fresher' && fresherDetails) {
+        yearsOfExperience = 0;
+        headline = `${fresherDetails.targetRole || 'Aspiring Software Engineer'} | ${fresherDetails.degree || 'CS Graduate'} (${fresherDetails.graduationYear || '2025'})`;
+        bio = `Motivated graduate from ${fresherDetails.collegeName || 'University'} specializing in ${fresherDetails.fieldOfStudy || 'Computer Science'}. Preparing for entry-level tech roles with solid fundamentals in DSA, OOP, and modern software development.`;
+        if (Array.isArray(fresherDetails.primarySkills) && fresherDetails.primarySkills.length > 0) {
+          skills = Array.from(new Set([...skills, ...fresherDetails.primarySkills]));
+        }
+        if (fresherDetails.collegeName && education.length === 0) {
+          education.push({
+            id: `edu-${Date.now()}`,
+            institution: fresherDetails.collegeName,
+            degree: fresherDetails.degree || 'Bachelor of Science',
+            fieldOfStudy: fresherDetails.fieldOfStudy || 'Computer Science',
+            startYear: String((parseInt(fresherDetails.graduationYear || '2025', 10) || 2025) - 4),
+            endYear: fresherDetails.graduationYear || '2025',
+          });
+        }
+        if (fresherDetails.finalYearProjectTitle && projects.length === 0) {
+          projects.push({
+            id: `proj-${Date.now()}`,
+            title: fresherDetails.finalYearProjectTitle,
+            description: fresherDetails.finalYearProjectSummary || 'Capstone academic software project.',
+            technologies: Array.isArray(fresherDetails.primarySkills) ? fresherDetails.primarySkills.slice(0, 5) : [],
+          });
+        }
+      } else if (experienceTrack === 'experienced' && experiencedDetails) {
+        yearsOfExperience = Number(experiencedDetails.totalYears) || 3;
+        headline = `${experiencedDetails.currentRole || 'Software Engineer'} | ${experiencedDetails.domain || 'Full-Stack'} (${yearsOfExperience}+ Years Experience)`;
+        bio = `${yearsOfExperience}+ years experienced professional at ${experiencedDetails.currentCompany || 'Tech'}. Specializing in ${experiencedDetails.domain || 'Software Engineering'} and targeting ${experiencedDetails.targetSeniority || 'Senior'} positions.`;
+        if (Array.isArray(experiencedDetails.primaryTechStack) && experiencedDetails.primaryTechStack.length > 0) {
+          skills = Array.from(new Set([...skills, ...experiencedDetails.primaryTechStack]));
+        }
+      }
+
+      const updated = db.upsertCandidate({
+        ...baseProfile,
+        headline,
+        bio,
+        yearsOfExperience,
+        skills,
+        education,
+        projects,
+        experienceTrack,
+        fresherDetails: experienceTrack === 'fresher' ? fresherDetails : baseProfile.fresherDetails,
+        experiencedDetails: experienceTrack === 'experienced' ? experiencedDetails : baseProfile.experiencedDetails,
+        onboardingCompleted: true,
+        updatedAt: new Date().toISOString(),
+      });
+
+      res.json({ profile: updated });
+    } catch (err: any) {
+      console.error('Candidate onboarding error:', err);
+      res.status(500).json({ error: err?.message || 'Failed to save onboarding calibration.' });
+    }
+  });
+
+  app.post('/api/candidates/resume', requireAuth, async (req, res) => {
     try {
       const { rawText, fileName } = req.body;
-      if (!rawText) {
+      if (!rawText || !String(rawText).trim()) {
         return res.status(400).json({ error: 'Resume raw text is required.' });
       }
-      const user = (req as any).currentUser || db.getUsers().find((u) => u.role === 'candidate');
-      const parsed = await parseResumeWithAI(rawText);
+      const user = (req as any).currentUser;
+      const parsed = await parseResumeWithAI(String(rawText));
 
-      // Merge into candidate profile
+      // Merge into candidate profile scoped strictly to current user
       if (user) {
-        const existing = db.getCandidateByUserId(user.id) || db.getCandidates()[0];
+        const existing = ensureCandidateProfile(user.id);
+        const skillsObj = parsed?.skills || {
+          languages: [],
+          frameworks: [],
+          toolsAndDatabases: [],
+          softSkills: [],
+        };
         const flatSkills = [
-          ...(parsed.skills.languages || []),
-          ...(parsed.skills.frameworks || []),
-          ...(parsed.skills.toolsAndDatabases || []),
+          ...(Array.isArray(skillsObj.languages) ? skillsObj.languages : []),
+          ...(Array.isArray(skillsObj.frameworks) ? skillsObj.frameworks : []),
+          ...(Array.isArray(skillsObj.toolsAndDatabases) ? skillsObj.toolsAndDatabases : []),
         ];
 
         const updatedProfile = db.upsertCandidate({
@@ -259,9 +497,9 @@ async function startServer() {
           headline: parsed.headline || existing.headline,
           bio: parsed.summary || existing.bio,
           resumeFileName: fileName || 'Uploaded_Resume.pdf',
-          resumeRawText: rawText,
+          resumeRawText: String(rawText),
           parsedResumeData: parsed,
-          skills: Array.from(new Set([...existing.skills, ...flatSkills])),
+          skills: Array.from(new Set([...(existing.skills || []), ...flatSkills])),
           updatedAt: new Date().toISOString(),
         });
 
@@ -275,16 +513,16 @@ async function startServer() {
     }
   });
 
-  app.get('/api/candidates/applications', (req, res) => {
-    const user = (req as any).currentUser || db.getUsers().find((u) => u.role === 'candidate');
-    const profile = user ? db.getCandidateByUserId(user.id) : db.getCandidates()[0];
+  app.get('/api/candidates/applications', requireAuth, (req, res) => {
+    const user = (req as any).currentUser;
+    const profile = db.getCandidateByUserId(user.id);
     const candidateId = profile ? profile.id : 'cand-1';
     const applications = db.getApplicationsByCandidateId(candidateId);
     res.json({ applications });
   });
 
   // ---------------- JOBS API ----------------
-  app.get('/api/jobs', (req, res) => {
+  app.get('/api/jobs', requireAuth, (req, res) => {
     const { search, remote, type, status } = req.query;
     let jobs = db.getJobs();
 
@@ -311,13 +549,13 @@ async function startServer() {
     res.json({ jobs });
   });
 
-  app.get('/api/jobs/:id', (req, res) => {
+  app.get('/api/jobs/:id', requireAuth, (req, res) => {
     const job = db.getJobById(req.params.id);
     if (!job) return res.status(404).json({ error: 'Job not found' });
     res.json({ job });
   });
 
-  app.post('/api/jobs', async (req, res) => {
+  app.post('/api/jobs', requireAuth, async (req, res) => {
     try {
       const {
         title,
@@ -376,20 +614,20 @@ async function startServer() {
     }
   });
 
-  app.put('/api/jobs/:id', (req, res) => {
+  app.put('/api/jobs/:id', requireAuth, (req, res) => {
     const updated = db.updateJob(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: 'Job not found' });
     res.json({ job: updated });
   });
 
-  app.delete('/api/jobs/:id', (req, res) => {
+  app.delete('/api/jobs/:id', requireAuth, (req, res) => {
     const success = db.deleteJob(req.params.id);
     if (!success) return res.status(404).json({ error: 'Job not found' });
     res.json({ success: true });
   });
 
   // ---------------- APPLICATIONS API ----------------
-  app.get('/api/applications', (req, res) => {
+  app.get('/api/applications', requireAuth, (req, res) => {
     const { jobId, candidateId, status } = req.query;
     let apps = db.getApplications();
     if (jobId) {
@@ -404,7 +642,7 @@ async function startServer() {
     res.json({ applications: apps });
   });
 
-  app.post('/api/applications', async (req, res) => {
+  app.post('/api/applications', requireAuth, async (req, res) => {
     try {
       const { jobId, candidateId } = req.body;
       const job = db.getJobById(jobId);
@@ -502,7 +740,7 @@ async function startServer() {
   });
 
   // ---------------- INTERVIEWS API ----------------
-  app.get('/api/interviews', (req, res) => {
+  app.get('/api/interviews', requireAuth, (req, res) => {
     const { candidateId, recruiterId, status } = req.query;
     let list = db.getInterviews();
     if (candidateId) list = list.filter((i) => i.candidateId === candidateId);
@@ -511,14 +749,14 @@ async function startServer() {
     res.json({ interviews: list });
   });
 
-  app.get('/api/interviews/:id', (req, res) => {
+  app.get('/api/interviews/:id', requireAuth, (req, res) => {
     const interview = db.getInterviewById(req.params.id);
     if (!interview) return res.status(404).json({ error: 'Interview not found' });
     const result = db.getInterviewResultByInterviewId(interview.id);
     res.json({ interview, result });
   });
 
-  app.post('/api/interviews', async (req, res) => {
+  app.post('/api/interviews', requireAuth, async (req, res) => {
     try {
       const {
         applicationId,
@@ -704,6 +942,11 @@ async function startServer() {
       const { fileBase64, mimeType, fileName } = req.body;
       if (!fileBase64) return res.status(400).json({ error: 'File data is required for text extraction' });
       const text = await extractTextFromFileWithAI(fileBase64, mimeType || 'application/pdf', fileName);
+      if (!text || !text.trim()) {
+        return res.status(422).json({
+          error: 'Could not extract readable text from this file. Please try uploading a PDF/TXT or paste your resume text directly.',
+        });
+      }
       res.json({ text });
     } catch (err: any) {
       res.status(500).json({ error: 'Text extraction from resume file failed', details: err.message });
@@ -796,36 +1039,36 @@ async function startServer() {
   });
 
   // ---------------- ADMIN API ----------------
-  app.get('/api/admin/metrics', (req, res) => {
+  app.get('/api/admin/metrics', requireAuth, (req, res) => {
     const metrics = db.getAdminMetrics();
     res.json({ metrics });
   });
 
-  app.get('/api/admin/users', (req, res) => {
-    const users = db.getUsers();
+  app.get('/api/admin/users', requireAuth, (req, res) => {
+    const users = db.getUsers().map((u) => sanitizeUser(u as User & { passwordHash?: string }));
     res.json({ users });
   });
 
-  app.patch('/api/admin/users/:id', (req, res) => {
+  app.patch('/api/admin/users/:id', requireAuth, (req, res) => {
     const updated = db.updateUser(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: 'User not found' });
-    res.json({ user: updated });
+    res.json({ user: sanitizeUser(updated as User & { passwordHash?: string }) });
   });
 
   // ---------------- NOTIFICATIONS API (SRS Section 24) ----------------
-  app.get('/api/notifications', (req, res) => {
+  app.get('/api/notifications', requireAuth, (req, res) => {
     const userId = req.query.userId as string | undefined;
     const notifications = db.getNotifications(userId);
     res.json({ notifications });
   });
 
-  app.patch('/api/notifications/:id/read', (req, res) => {
+  app.patch('/api/notifications/:id/read', requireAuth, (req, res) => {
     const success = db.markNotificationAsRead(req.params.id);
     if (!success) return res.status(404).json({ error: 'Notification not found' });
     res.json({ success: true });
   });
 
-  app.post('/api/notifications/read-all', (req, res) => {
+  app.post('/api/notifications/read-all', requireAuth, (req, res) => {
     const { userId } = req.body;
     db.markAllNotificationsAsRead(userId);
     res.json({ success: true });

@@ -1,125 +1,143 @@
-import React, { useState } from 'react';
-import { AIParsedResume } from '../types.ts';
+import React, { useState, useRef, useEffect } from 'react';
+import { AIParsedResume, CandidateProfile } from '../types.ts';
+import { getAuthToken } from '../utils/authToken.ts';
 import {
   UploadCloud,
   FileText,
   CheckCircle2,
   AlertCircle,
   Loader2,
-  Sparkles,
-  RefreshCw,
-  Code2,
-  Briefcase,
-  GraduationCap,
+  Trash2,
 } from 'lucide-react';
 
 interface ResumeUploaderProps {
   currentParsed?: AIParsedResume;
-  onParsedSuccess: (parsed: AIParsedResume) => void;
+  currentFileName?: string;
+  currentRawText?: string;
+  onRemoveResume?: () => void;
+  onParsedSuccess: (
+    parsed: AIParsedResume,
+    meta?: { rawText: string; fileName: string; profile?: CandidateProfile }
+  ) => void;
 }
 
-const SAMPLE_RESUMES = {
-  alex: {
-    title: 'Alex Rivera — Senior Full-Stack & WebRTC Engineer',
-    text: `ALEX RIVERA
-alex.rivera@example.com | (555) 349-8821 | San Francisco, CA | github.com/alexrivera-dev
-
-PROFESSIONAL SUMMARY
-Senior Full-Stack Engineer with 6+ years building real-time media platforms, WebRTC peer connection pipelines, high-throughput Node.js microservices, and React 19 web applications.
-
-CORE TECHNICAL SKILLS
-Languages: TypeScript, JavaScript, Python, SQL, Go
-Frameworks & Libraries: React, Next.js, Express, Node.js, Tailwind CSS
-Protocols & Real-Time: WebRTC, WebSockets, REST APIs, ICE/STUN/TURN
-Cloud & Data: PostgreSQL, MongoDB, Redis, AWS, Docker, Kubernetes
-
-WORK HISTORY
-Nexus Realtime Inc. — Senior Full-Stack Engineer (March 2022 - Present)
-- Engineered scalable WebRTC video conferencing engine handling 150k daily active sessions with low latency.
-- Built real-time media signaling service in Node.js and Redis Pub/Sub, reducing packet retransmissions by 35%.
-- Spearheaded frontend architecture rewrite using React and modern headless design systems.
-
-StreamScale Labs — Full-Stack Developer (July 2020 - Feb 2022)
-- Developed telemetry dashboard visualizers and ingestion APIs processing 25,000 writes/second in PostgreSQL.
-- Slashed median API latency by 45% through aggressive query optimization and Redis caching.
-
-EDUCATION
-B.S. in Computer Science — UC Berkeley (2016 - 2020)
-
-CERTIFICATIONS
-- AWS Certified Solutions Architect
-- Certified Kubernetes Application Developer (CKAD)`,
-  },
-  priya: {
-    title: 'Priya Sharma — AI/ML Platform Engineer',
-    text: `PRIYA SHARMA
-priya.sharma@example.com | (555) 812-4491 | Seattle, WA
-
-PROFESSIONAL SUMMARY
-Machine Learning & AI Platform Engineer specializing in high-throughput LLM inference, embedding pipelines, vector databases, and Python microservices.
-
-CORE SKILLS
-Languages: Python, C++, SQL
-Frameworks: PyTorch, FastAPI, LangChain, Transformers, HuggingFace
-Cloud & Tools: Docker, Kubernetes, GCP, PostgreSQL, Milvus, Redis
-
-WORK HISTORY
-Aether AI Labs — AI Infrastructure Engineer (August 2021 - Present)
-- Designed production LLM evaluation harnesses and semantic search retrieval pipelines with sub-50ms latency.
-- Scaled distributed model inference workers utilizing GPU batch scheduling and tensor parallelism.
-
-EDUCATION
-M.S. in Computer Science (Artificial Intelligence) — University of Washington (2019 - 2021)`,
-  },
-};
-
-export const ResumeUploader: React.FC<ResumeUploaderProps> = ({ currentParsed, onParsedSuccess }) => {
-  const [resumeText, setResumeText] = useState('');
-  const [fileName, setFileName] = useState<string>('Uploaded_Resume.pdf');
+export const ResumeUploader: React.FC<ResumeUploaderProps> = ({
+  currentParsed,
+  currentFileName,
+  currentRawText,
+  onRemoveResume,
+  onParsedSuccess,
+}) => {
+  const [resumeText, setResumeText] = useState(currentRawText || '');
+  const [fileName, setFileName] = useState<string>(currentFileName || '');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'upload' | 'text'>('upload');
-  const [isDragOver, setIsDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (currentFileName !== undefined) {
+      setFileName(currentFileName);
+    }
+  }, [currentFileName]);
+
+  useEffect(() => {
+    if (currentRawText !== undefined) {
+      setResumeText(currentRawText);
+    }
+  }, [currentRawText]);
+
+  const processSelectedFile = async (file: File) => {
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) {
+      setError('File size exceeds the 15MB limit. Please upload a smaller resume file.');
+      return;
+    }
+
+    setFileName(file.name);
+    setError(null);
+
+    const lowerName = file.name.toLowerCase();
+    const isPlainText =
+      lowerName.endsWith('.txt') ||
+      lowerName.endsWith('.md') ||
+      (file.type && file.type.startsWith('text/'));
+
+    if (isPlainText) {
+      const reader = new FileReader();
+      reader.onload = async (evt) => {
+        const content = (evt.target?.result as string) || '';
+        if (!content.trim()) {
+          setError('The uploaded text file appears to be empty.');
+          return;
+        }
+        setResumeText(content);
+        await triggerAnalysis(content, file.name);
+      };
+      reader.readAsText(file);
+      return;
+    }
+
+    const mimeType =
+      file.type ||
+      (lowerName.endsWith('.pdf')
+        ? 'application/pdf'
+        : lowerName.endsWith('.docx')
+          ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          : lowerName.endsWith('.doc')
+            ? 'application/msword'
+            : 'application/pdf');
+
+    setIsAnalyzing(true);
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const dataUrl = (evt.target?.result as string) || '';
+        const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1] : dataUrl;
+        if (!base64) {
+          throw new Error('Could not read file contents.');
+        }
+
+        const token = getAuthToken();
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (token) headers.Authorization = `Bearer ${token}`;
+
+        const extractRes = await fetch('/api/ai/resume/extract-text', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ fileBase64: base64, mimeType, fileName: file.name }),
+        });
+        const extractData = await extractRes.json().catch(() => ({}));
+        if (!extractRes.ok || !extractData.text?.trim()) {
+          throw new Error(
+            extractData.error ||
+              extractData.details ||
+              'Could not extract text from this document. Try pasting your resume text or uploading a PDF/TXT file.'
+          );
+        }
+
+        setResumeText(extractData.text);
+        await triggerAnalysis(extractData.text, file.name);
+      } catch (err: any) {
+        setError(err?.message || 'Failed to read and extract resume document.');
+        setIsAnalyzing(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    setFileName(file.name);
-
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      const content = evt.target?.result as string;
-      if (content) {
-        setResumeText(content);
-        triggerAnalysis(content, file.name);
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    const file = e.dataTransfer.files?.[0];
     if (file) {
-      setFileName(file.name);
-      const reader = new FileReader();
-      reader.onload = async (evt) => {
-        const content = evt.target?.result as string;
-        if (content) {
-          setResumeText(content);
-          triggerAnalysis(content, file.name);
-        }
-      };
-      reader.readAsText(file);
+      void processSelectedFile(file);
     }
+    e.target.value = '';
   };
 
-  const loadSample = (key: 'alex' | 'priya') => {
-    const sample = SAMPLE_RESUMES[key];
-    setResumeText(sample.text);
-    setFileName(`${key === 'alex' ? 'Alex_Rivera_Resume' : 'Priya_Sharma_Resume'}.pdf`);
-    triggerAnalysis(sample.text, `${key}_Resume.pdf`);
+  const handleRemoveUploaded = () => {
+    setFileName('');
+    setResumeText('');
+    setError(null);
+    onRemoveResume?.();
   };
 
   const triggerAnalysis = async (textToParse: string, nameOfFile: string) => {
@@ -131,19 +149,27 @@ export const ResumeUploader: React.FC<ResumeUploaderProps> = ({ currentParsed, o
     setError(null);
 
     try {
+      const token = getAuthToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
       const res = await fetch('/api/candidates/resume', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ rawText: textToParse, fileName: nameOfFile }),
       });
 
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error('Failed to analyze resume with AI service');
+        throw new Error(data.details || data.error || 'Failed to analyze resume with AI service');
       }
 
-      const data = await res.json();
       if (data.parsed) {
-        onParsedSuccess(data.parsed);
+        onParsedSuccess(data.parsed, {
+          rawText: textToParse,
+          fileName: nameOfFile,
+          profile: data.profile,
+        });
       }
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred during resume parsing');
@@ -154,7 +180,7 @@ export const ResumeUploader: React.FC<ResumeUploaderProps> = ({ currentParsed, o
 
   return (
     <div className="bg-white dark:bg-neutral-900 rounded-2xl border border-neutral-200/90 dark:border-neutral-800 shadow-xs p-6 text-neutral-900 dark:text-neutral-100 transition-colors">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-5 border-b border-neutral-100 dark:border-neutral-800 gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-5 mb-5 border-b border-neutral-100 dark:border-neutral-800 gap-3">
         <div>
           <div className="flex items-center space-x-2">
             <h3 className="text-lg font-bold text-neutral-900 dark:text-white">AI Resume Parser & Skill Extraction</h3>
@@ -166,110 +192,97 @@ export const ResumeUploader: React.FC<ResumeUploaderProps> = ({ currentParsed, o
             Extracts structured skills, work history, and education to power explainable job matching and tailored interview questions.
           </p>
         </div>
-
-        {/* Sample Loaders */}
-        <div className="flex items-center space-x-2">
-          <button
-            type="button"
-            onClick={() => loadSample('alex')}
-            className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 transition-colors"
-          >
-            Load Alex's Full-Stack Resume
-          </button>
-          <button
-            type="button"
-            onClick={() => loadSample('priya')}
-            className="px-2.5 py-1.5 text-xs font-medium rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 transition-colors"
-          >
-            Load Priya's AI/ML Resume
-          </button>
-        </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex space-x-4 mt-4 mb-4 border-b border-neutral-100 dark:border-neutral-800 text-sm">
-        <button
-          onClick={() => setActiveTab('upload')}
-          className={`pb-2.5 font-medium transition-colors border-b-2 ${
-            activeTab === 'upload'
-              ? 'border-neutral-900 dark:border-white text-neutral-900 dark:text-white font-semibold'
-              : 'border-transparent text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200'
-          }`}
-        >
-          Upload Document (PDF / DOCX / TXT)
-        </button>
-        <button
-          onClick={() => setActiveTab('text')}
-          className={`pb-2.5 font-medium transition-colors border-b-2 ${
-            activeTab === 'text'
-              ? 'border-neutral-900 dark:border-white text-neutral-900 dark:text-white font-semibold'
-              : 'border-transparent text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200'
-          }`}
-        >
-          Paste Raw Resume Text
-        </button>
-      </div>
+      {/* Hidden File Input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        id="resume-file-input"
+        accept=".pdf,.docx,.doc,.txt"
+        onChange={handleFileUpload}
+        className="hidden"
+      />
 
-      {/* Upload Zone */}
-      {activeTab === 'upload' ? (
-        <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            setIsDragOver(true);
-          }}
-          onDragLeave={() => setIsDragOver(false)}
-          onDrop={handleDrop}
-          className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-all ${
-            isDragOver
-              ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30'
-              : 'border-neutral-200 dark:border-neutral-700 hover:border-neutral-300 dark:hover:border-neutral-600 bg-neutral-50/50 dark:bg-neutral-800'
-          }`}
-        >
-          <input
-            type="file"
-            id="resume-file-input"
-            accept=".pdf,.docx,.doc,.txt"
-            onChange={handleFileUpload}
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-          />
-          <div className="mx-auto w-12 h-12 rounded-xl bg-white dark:bg-neutral-800 shadow-xs border border-neutral-200 dark:border-neutral-700 flex items-center justify-center text-neutral-600 dark:text-neutral-300 mb-3">
-            <UploadCloud className="w-6 h-6 text-neutral-700 dark:text-neutral-300" />
-          </div>
-          <h4 className="text-sm font-semibold text-neutral-900 dark:text-white">
-            Drag & drop your resume, or <span className="text-emerald-700 dark:text-emerald-400 underline">browse files</span>
-          </h4>
-          <p className="text-xs text-neutral-500 mt-1">Supports PDF, DOCX, and TXT files up to 15MB</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <textarea
-            rows={7}
-            value={resumeText}
-            onChange={(e) => setResumeText(e.target.value)}
-            placeholder="Paste your plain text resume content here..."
-            className="w-full text-xs font-mono p-3 rounded-xl border border-neutral-300 focus:outline-none focus:ring-2 focus:ring-neutral-900 bg-neutral-50/50"
-          />
-          <div className="flex justify-end">
-            <button
-              onClick={() => triggerAnalysis(resumeText, 'Pasted_Resume.txt')}
-              disabled={isAnalyzing || !resumeText.trim()}
-              className="inline-flex items-center px-4 py-2 rounded-xl text-sm font-semibold bg-neutral-900 hover:bg-neutral-800 text-white disabled:opacity-50 transition-colors"
-            >
-              {isAnalyzing ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Analyzing with AI...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 mr-2 text-emerald-400" />
-                  Parse Resume with AI
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Upload Zone / Uploaded Resume Card */}
+      {(() => {
+          const displayName = (currentFileName || fileName || '').trim();
+          const hasUploadedResume = Boolean(displayName || currentParsed || (currentRawText || resumeText).trim());
+          const uploadedWordCount = (currentRawText ?? resumeText).trim().split(/\s+/).filter(Boolean).length;
+
+          if (hasUploadedResume) {
+            return (
+              <div className="rounded-xl border border-emerald-200 dark:border-emerald-800/80 bg-emerald-50/50 dark:bg-emerald-950/25 p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center space-x-3.5 min-w-0">
+                  <div className="w-11 h-11 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                    <FileText className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-bold text-neutral-900 dark:text-white truncate max-w-[260px] sm:max-w-sm">
+                        {displayName || 'Uploaded_Resume.pdf'}
+                      </span>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-900/70 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-700">
+                        <CheckCircle2 className="w-3 h-3 mr-1" />
+                        Resume Uploaded
+                      </span>
+                    </div>
+                    <p className="text-xs text-neutral-600 dark:text-neutral-300 mt-1">
+                      {currentParsed?.name ? `${currentParsed.name} • ` : ''}
+                      {uploadedWordCount > 0 ? `${uploadedWordCount} words extracted` : 'Ready for AI analysis & ATS scoring'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isAnalyzing}
+                    className="inline-flex items-center px-3.5 py-2 rounded-xl text-xs font-semibold bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-100 border border-neutral-200 dark:border-neutral-700 transition-colors shadow-2xs cursor-pointer disabled:opacity-50"
+                  >
+                    <UploadCloud className="w-3.5 h-3.5 mr-1.5 text-emerald-600 dark:text-emerald-400" />
+                    <span>Replace File</span>
+                  </button>
+                  {onRemoveResume && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveUploaded}
+                      disabled={isAnalyzing}
+                      className="inline-flex items-center px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 transition-colors cursor-pointer disabled:opacity-50"
+                      title="Remove uploaded resume"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 mr-1" />
+                      <span>Remove</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div className="border border-neutral-200 dark:border-neutral-700 rounded-xl p-6 text-center bg-neutral-50/50 dark:bg-neutral-800/70">
+              <div className="mx-auto w-11 h-11 rounded-xl bg-white dark:bg-neutral-800 shadow-xs border border-neutral-200 dark:border-neutral-700 flex items-center justify-center text-neutral-700 dark:text-neutral-300 mb-3">
+                <UploadCloud className="w-5 h-5" />
+              </div>
+              <h4 className="text-sm font-semibold text-neutral-900 dark:text-white">
+                Upload your resume document
+              </h4>
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1 mb-4">
+                Supports PDF, DOCX, and TXT files up to 15MB
+              </p>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center px-4 py-2 rounded-xl text-xs font-semibold bg-neutral-900 dark:bg-emerald-500 hover:bg-neutral-800 dark:hover:bg-emerald-400 text-white dark:text-neutral-950 transition-colors shadow-xs cursor-pointer"
+              >
+                <UploadCloud className="w-4 h-4 mr-1.5" />
+                <span>Select Resume File</span>
+              </button>
+            </div>
+          );
+        })()}
 
       {/* Loading state indicator */}
       {isAnalyzing && (
@@ -314,29 +327,29 @@ export const ResumeUploader: React.FC<ResumeUploaderProps> = ({ currentParsed, o
               <div className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-2 flex items-center justify-between">
                 <span>Verified Skills Taxonomy</span>
                 <span className="text-[11px] text-emerald-700 font-medium">
-                  {currentParsed.skills.languages.length +
-                    currentParsed.skills.frameworks.length +
-                    currentParsed.skills.toolsAndDatabases.length}{' '}
+                  {(currentParsed.skills?.languages?.length || 0) +
+                    (currentParsed.skills?.frameworks?.length || 0) +
+                    (currentParsed.skills?.toolsAndDatabases?.length || 0)}{' '}
                   competencies detected
                 </span>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {currentParsed.skills.languages.map((s, idx) => (
+                {(currentParsed.skills?.languages || []).map((s, idx) => (
                   <span key={idx} className="px-2 py-0.5 text-xs font-medium bg-blue-50 text-blue-700 rounded-md border border-blue-200">
                     {s}
                   </span>
                 ))}
-                {currentParsed.skills.frameworks.map((s, idx) => (
+                {(currentParsed.skills?.frameworks || []).map((s, idx) => (
                   <span key={idx} className="px-2 py-0.5 text-xs font-medium bg-purple-50 text-purple-700 rounded-md border border-purple-200">
                     {s}
                   </span>
                 ))}
-                {currentParsed.skills.toolsAndDatabases.map((s, idx) => (
+                {(currentParsed.skills?.toolsAndDatabases || []).map((s, idx) => (
                   <span key={idx} className="px-2 py-0.5 text-xs font-medium bg-emerald-50 text-emerald-700 rounded-md border border-emerald-200">
                     {s}
                   </span>
                 ))}
-                {currentParsed.skills.softSkills.map((s, idx) => (
+                {(currentParsed.skills?.softSkills || []).map((s, idx) => (
                   <span key={idx} className="px-2 py-0.5 text-xs font-medium bg-amber-50 text-amber-700 rounded-md border border-amber-200">
                     {s}
                   </span>

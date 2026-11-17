@@ -18,7 +18,7 @@ import {
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLoginSuccess: (user: User, isSignUp?: boolean) => void;
+  onLoginSuccess: (user: User, token: string, isSignUp?: boolean, profile?: any) => void;
   initialMode?: 'signin' | 'signup';
 }
 
@@ -50,26 +50,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email }),
+          body: JSON.stringify({ email, password }),
         });
         const data = await res.json();
         if (!res.ok) {
           throw new Error(data.error || 'Failed to sign in. Check your email or use a demo account.');
         }
-        onLoginSuccess(data.user, false);
+        onLoginSuccess(data.user, data.token, false, data.profile);
         onClose();
       } else {
         if (!name.trim()) throw new Error('Please enter your full name');
+        if (password.length < 6) throw new Error('Password must be at least 6 characters');
         const res = await fetch('/api/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, email, role }),
+          body: JSON.stringify({ name, email, password, role }),
         });
         const data = await res.json();
         if (!res.ok) {
           throw new Error(data.error || 'Failed to create account.');
         }
-        onLoginSuccess(data.user, true);
+        onLoginSuccess(data.user, data.token, true, data.profile);
         onClose();
       }
     } catch (err: any) {
@@ -87,11 +88,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: demoEmail }),
+        body: JSON.stringify({ email: demoEmail, isDemo: true }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Demo login failed');
-      onLoginSuccess(data.user);
+      onLoginSuccess(data.user, data.token, false, data.profile);
       onClose();
     } catch (err: any) {
       setError(err.message);
@@ -310,7 +311,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
             <button
               type="button"
-              onClick={() => handleQuickDemo('marcus.admin@talentpulse.ai')}
+              onClick={() => handleQuickDemo('admin@platform.internal')}
               disabled={loading}
               className="w-full px-3 py-2 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-800/60 hover:bg-white dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 text-xs font-semibold flex items-center justify-between transition-colors"
             >

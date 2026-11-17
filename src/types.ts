@@ -13,6 +13,13 @@ export type InterviewType = 'AI Technical' | 'AI HR' | 'Recruiter' | 'Mixed';
 
 export type InterviewStatus = 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
 
+export interface AdminDetails {
+  organization: string;
+  department: string;
+  adminTitle: string;
+  governanceScope: string[];
+}
+
 export interface User {
   id: string;
   name: string;
@@ -20,6 +27,7 @@ export interface User {
   role: UserRole;
   status: 'active' | 'suspended';
   avatar?: string;
+  adminDetails?: AdminDetails;
   createdAt: string;
 }
 

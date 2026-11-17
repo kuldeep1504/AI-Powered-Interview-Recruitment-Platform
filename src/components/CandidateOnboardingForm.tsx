@@ -147,6 +147,7 @@ export const CandidateOnboardingForm: React.FC<CandidateOnboardingFormProps> = (
   );
 
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Toggle helpers for skills
   const toggleFresherCoursework = (item: string) => {
@@ -179,6 +180,7 @@ export const CandidateOnboardingForm: React.FC<CandidateOnboardingFormProps> = (
     setProjectTitle('PeerCollab — Collaborative Coding Classroom');
     setProjectSummary('Web app enabling peers to pair-code with real-time cursor sync and automated code test execution using Docker containers.');
     setFresherGoal('campus_placements');
+    setError(null);
   };
 
   const applySampleExperienced = () => {
@@ -191,15 +193,27 @@ export const CandidateOnboardingForm: React.FC<CandidateOnboardingFormProps> = (
     setTechStack(['TypeScript', 'React', 'Node.js', 'WebRTC', 'PostgreSQL', 'Redis', 'Docker', 'System Design']);
     setAchievement('Architected WebRTC video streaming engine handling 150k daily active sessions with 99.99% uptime.');
     setExpFocus('system_design');
+    setError(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
+
+    if (track === 'fresher' && !collegeName.trim()) {
+      setError('Please enter your college or university name.');
+      return;
+    }
+    if (track === 'experienced' && (!currentRole.trim() || !currentCompany.trim())) {
+      setError('Please enter your current role and company name.');
+      return;
+    }
+
     setSaving(true);
     try {
       if (track === 'fresher') {
         const fresherData: FresherDetails = {
-          collegeName,
+          collegeName: collegeName.trim(),
           degree,
           fieldOfStudy,
           graduationYear,
@@ -214,8 +228,8 @@ export const CandidateOnboardingForm: React.FC<CandidateOnboardingFormProps> = (
         await onSaveOnboarding('fresher', fresherData, undefined);
       } else {
         const expData: ExperiencedDetails = {
-          currentRole,
-          currentCompany,
+          currentRole: currentRole.trim(),
+          currentCompany: currentCompany.trim(),
           totalYears,
           domain,
           targetSeniority,
@@ -226,8 +240,9 @@ export const CandidateOnboardingForm: React.FC<CandidateOnboardingFormProps> = (
         };
         await onSaveOnboarding('experienced', undefined, expData);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Onboarding save error:', err);
+      setError(err?.message || 'Unable to launch dashboard. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -271,7 +286,7 @@ export const CandidateOnboardingForm: React.FC<CandidateOnboardingFormProps> = (
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      <form onSubmit={handleSubmit} noValidate className="space-y-6">
         {/* Track Selection Cards */}
         <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-neutral-200/90 dark:border-neutral-800 p-6 sm:p-8 shadow-xs">
           <label className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400 block mb-4">
@@ -725,6 +740,11 @@ export const CandidateOnboardingForm: React.FC<CandidateOnboardingFormProps> = (
                 ? 'Your dashboard will unlock Core CS Drills (DSA, OOP, DBMS, OS), Project Defense simulators, Entry-Level Job matching, and friendly conceptual mock interviews.'
                 : 'Your dashboard will unlock High-Scale System Design drills, Production Outage Post-Mortems, Executive STAR Leadership questions, and Senior Job compensation bands.'}
             </p>
+            {error && (
+              <p role="alert" className="text-xs font-semibold text-rose-600 dark:text-rose-400 pt-1">
+                {error}
+              </p>
+            )}
           </div>
 
           <div className="flex items-center space-x-3 shrink-0">
@@ -732,7 +752,7 @@ export const CandidateOnboardingForm: React.FC<CandidateOnboardingFormProps> = (
               <button
                 type="button"
                 onClick={onCancel}
-                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700 transition-colors"
+                className="px-4 py-2.5 rounded-xl text-xs font-semibold text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-700 transition-colors cursor-pointer"
               >
                 Cancel
               </button>
@@ -741,7 +761,7 @@ export const CandidateOnboardingForm: React.FC<CandidateOnboardingFormProps> = (
             <button
               type="submit"
               disabled={saving}
-              className={`inline-flex items-center space-x-2 px-6 py-3 rounded-xl text-xs font-black text-white shadow-md transition-all ${
+              className={`inline-flex items-center space-x-2 px-6 py-3 rounded-xl text-xs font-black text-white shadow-md transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
                 track === 'fresher'
                   ? 'bg-emerald-600 hover:bg-emerald-700'
                   : 'bg-blue-600 hover:bg-blue-700'

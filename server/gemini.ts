@@ -1,4 +1,5 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import zlib from 'zlib';
 import {
   AIParsedResume,
   AIJobAnalysis,
@@ -32,7 +33,14 @@ function getAIClient(): GoogleGenAI | null {
   return aiClient;
 }
 
-const FALLBACK_MODELS = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+const FALLBACK_MODELS = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'];
+const modelCooldownUntil: Record<string, number> = {};
+const MODEL_COOLDOWN_MS = 2 * 60 * 1000;
+
+function isTimeoutError(err: any): boolean {
+  const msg = (err?.message || String(err || '')).toLowerCase();
+  return msg.includes('timed out') || msg.includes('timeout') || msg.includes('etimedout');
+}
 
 function isRetryableError(err: any): boolean {
   if (!err) return false;
@@ -49,6 +57,9 @@ function isRetryableError(err: any): boolean {
     msg.includes('rate limit') ||
     msg.includes('econnreset') ||
     msg.includes('etimedout') ||
+    msg.includes('timed out') ||
+    msg.includes('timeout') ||
+    msg.includes('fetch failed') ||
     msg.includes('overloaded')
   ) {
     return true;
@@ -72,44 +83,58 @@ async function generateContentWithFailover(
     return null;
   }
 
-  const preferred = options.preferredModel || 'gemini-3.8-flash';
+  const preferred = options.preferredModel || 'gemini-4-hydrogen';
+  const baseOrder = [preferred, ...FALLBACK_MODELS.filter((m) => m !== preferred)];
+  const now = Date.now();
   const candidateModels = [
-    preferred,
-    ...FALLBACK_MODELS.filter((m) => m !== preferred),
+    ...baseOrder.filter((m) => (modelCooldownUntil[m] || 0) <= now),
+    ...baseOrder.filter((m) => (modelCooldownUntil[m] || 0) > now),
   ];
 
   for (const model of candidateModels) {
     for (let attempt = 0; attempt < 2; attempt++) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const timeoutMs = 8000;
+        const timeoutMs = 10000;
+        const modelConfig =
+          model === 'gemini-4-hydrogen' && !options.config?.thinkingConfig
+            ? {
+                ...(options.config || {}),
+                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+              }
+            : options.config;
+
         const apiPromise = client.models.generateContent({
           model,
           contents: options.contents,
-          config: options.config,
+          config: modelConfig,
         });
 
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('AI request timed out after 8s')), timeoutMs)
-        );
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`AI request timed out after ${timeoutMs / 1000}s`)), timeoutMs);
+        });
 
         const response = await Promise.race([apiPromise, timeoutPromise]);
+        if (timer) clearTimeout(timer);
 
         if (response && response.text) {
+          delete modelCooldownUntil[model];
           return response;
         }
       } catch (err: any) {
+        if (timer) clearTimeout(timer);
+        const timedOut = isTimeoutError(err);
         const retryable = isRetryableError(err);
         const errMsg = err?.message || String(err);
 
-        if (retryable && attempt === 0) {
-          // Brief exponential backoff
-          const waitMs = 350 + Math.random() * 250;
-          await delay(waitMs);
-          continue;
-        }
-
         if (retryable) {
-          // Model is busy or experiencing high demand; fail over to next model in pool
+          modelCooldownUntil[model] = Date.now() + MODEL_COOLDOWN_MS;
+          if (!timedOut && attempt === 0) {
+            const waitMs = 300 + Math.random() * 200;
+            await delay(waitMs);
+            continue;
+          }
+          // Fail over immediately to next model on timeout or repeated transient unavailability
           break;
         }
 
@@ -547,11 +572,78 @@ Generate an advisory synthesis containing:
   return fallbackSummarizeInterview(answers, transcriptSummary);
 }
 
+function extractDocxPlainText(base64Data: string): string {
+  try {
+    const buf = Buffer.from(base64Data, 'base64');
+    // Scan End of Central Directory (PK\x05\x06) backwards
+    let eocdOffset = -1;
+    const minOffset = Math.max(0, buf.length - 65557);
+    for (let i = buf.length - 22; i >= minOffset; i--) {
+      if (buf.readUInt32LE(i) === 0x06054b50) {
+        eocdOffset = i;
+        break;
+      }
+    }
+    if (eocdOffset === -1) return '';
+
+    const cdOffset = buf.readUInt32LE(eocdOffset + 16);
+    const totalEntries = buf.readUInt16LE(eocdOffset + 10);
+    let offset = cdOffset;
+
+    for (let i = 0; i < totalEntries && offset + 46 <= buf.length; i++) {
+      if (buf.readUInt32LE(offset) !== 0x02014b50) break;
+      const compression = buf.readUInt16LE(offset + 10);
+      const compressedSize = buf.readUInt32LE(offset + 20);
+      const fileNameLen = buf.readUInt16LE(offset + 28);
+      const extraLen = buf.readUInt16LE(offset + 30);
+      const commentLen = buf.readUInt16LE(offset + 32);
+      const localHeaderOffset = buf.readUInt32LE(offset + 42);
+      const entryName = buf.toString('utf8', offset + 46, offset + 46 + fileNameLen);
+      offset += 46 + fileNameLen + extraLen + commentLen;
+
+      if (entryName === 'word/document.xml') {
+        if (buf.readUInt32LE(localHeaderOffset) !== 0x04034b50) return '';
+        const lhNameLen = buf.readUInt16LE(localHeaderOffset + 26);
+        const lhExtraLen = buf.readUInt16LE(localHeaderOffset + 28);
+        const dataStart = localHeaderOffset + 30 + lhNameLen + lhExtraLen;
+        const compressed = buf.subarray(dataStart, dataStart + compressedSize);
+        const xmlBuf = compression === 0 ? compressed : zlib.inflateRawSync(compressed);
+        const xml = xmlBuf.toString('utf8');
+        return xml
+          .replace(/<\/w:p>/g, '\n')
+          .replace(/<w:tab\/>/g, ' ')
+          .replace(/<w:br[^>]*\/>/g, '\n')
+          .replace(/<[^>]+>/g, '')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'")
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+      }
+    }
+  } catch {
+    // Fall through
+  }
+  return '';
+}
+
 export async function extractTextFromFileWithAI(
   base64Data: string,
   mimeType: string,
   fileName?: string
 ): Promise<string> {
+  if (
+    fileName?.toLowerCase().endsWith('.docx') ||
+    mimeType.includes('wordprocessingml')
+  ) {
+    const docxText = extractDocxPlainText(base64Data);
+    if (docxText.trim()) {
+      return docxText;
+    }
+  }
+
   try {
     const response = await generateContentWithFailover({
       contents: [
@@ -801,9 +893,13 @@ function fallbackParseResume(text: string): AIParsedResume {
   const commonFrameworks = ['React', 'Node.js', 'Next.js', 'Express', 'Django', 'FastAPI', 'Spring Boot', 'Vue', 'Tailwind CSS'];
   const commonTools = ['Docker', 'Kubernetes', 'AWS', 'GCP', 'PostgreSQL', 'MongoDB', 'Redis', 'Git', 'Kafka'];
 
-  const foundLangs = commonLangs.filter((l) => new RegExp(`\\b${l}\\b`, 'i').test(text));
-  const foundFrameworks = commonFrameworks.filter((f) => new RegExp(`\\b${f}\\b`, 'i').test(text));
-  const foundTools = commonTools.filter((t) => new RegExp(`\\b${t}\\b`, 'i').test(text));
+  const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const containsSkill = (haystack: string, skill: string) =>
+    new RegExp(`(?:^|[^a-zA-Z0-9])${escapeRegex(skill)}(?:$|[^a-zA-Z0-9])`, 'i').test(haystack);
+
+  const foundLangs = commonLangs.filter((l) => containsSkill(text, l));
+  const foundFrameworks = commonFrameworks.filter((f) => containsSkill(text, f));
+  const foundTools = commonTools.filter((t) => containsSkill(text, t));
 
   return {
     name,

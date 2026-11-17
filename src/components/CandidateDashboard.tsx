@@ -1,5 +1,5 @@
 import React from 'react';
-import { CandidateProfile, Application, Interview, Job } from '../types.ts';
+import { User, CandidateProfile, Application, Interview, Job } from '../types.ts';
 import {
   FileText,
   Briefcase,
@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 
 interface CandidateDashboardProps {
+  currentUser?: User;
   profile: CandidateProfile;
   applications: Application[];
   interviews: Interview[];
@@ -36,6 +37,7 @@ interface CandidateDashboardProps {
 }
 
 export const CandidateDashboard: React.FC<CandidateDashboardProps> = ({
+  currentUser,
   profile,
   applications,
   interviews,
@@ -121,19 +123,49 @@ export const CandidateDashboard: React.FC<CandidateDashboardProps> = ({
         </div>
       </div>
 
-      {/* Main Welcome Banner + Profile Strength Card */}
+      {/* Main Welcome Banner + User Profile Details */}
       <div className="bg-white dark:bg-neutral-900 rounded-3xl border border-neutral-200/90 dark:border-neutral-800 p-6 md:p-8 shadow-xs transition-colors">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div>
-            <span className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-              {isFresher ? 'Fresher Job Readiness Portal' : 'Senior Technical Portal'}
-            </span>
-            <h2 className="text-2xl font-extrabold text-neutral-900 dark:text-white tracking-tight mt-1">
-              Welcome back, {profile.parsedResumeData?.name || (isFresher ? 'David Chen' : 'Alex Rivera')}
-            </h2>
-            <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-1 max-w-xl">
-              {profile.headline || (isFresher ? 'Aspiring Software Engineer | CS Graduate' : 'Senior Full-Stack & WebRTC Engineer')}
-            </p>
+          <div className="flex items-start space-x-4">
+            {currentUser?.avatar && (
+              <img
+                src={currentUser.avatar}
+                alt={currentUser.name}
+                className="w-14 h-14 rounded-2xl object-cover border border-neutral-200 dark:border-neutral-700 shrink-0"
+              />
+            )}
+            <div className="space-y-1.5">
+              <span className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                {isFresher ? 'Fresher Job Readiness Portal' : 'Senior Technical Portal'}
+              </span>
+              <h2 className="text-2xl font-extrabold text-neutral-900 dark:text-white tracking-tight">
+                Welcome back, {currentUser?.name || profile.parsedResumeData?.name || 'User'}
+              </h2>
+
+              {profile.headline && profile.headline !== 'Candidate' && (
+                <p className="text-sm font-medium text-neutral-700 dark:text-neutral-300 max-w-2xl">
+                  {profile.headline}
+                </p>
+              )}
+
+              {profile.skills.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {profile.skills.slice(0, 6).map((skill, idx) => (
+                    <span
+                      key={idx}
+                      className="px-2 py-0.5 text-[11px] font-medium rounded-md bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 border border-neutral-200 dark:border-neutral-700"
+                    >
+                      {skill}
+                    </span>
+                  ))}
+                  {profile.skills.length > 6 && (
+                    <span className="px-2 py-0.5 text-[11px] text-neutral-500 dark:text-neutral-400">
+                      +{profile.skills.length - 6} more
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Profile Strength Card */}
@@ -151,8 +183,8 @@ export const CandidateDashboard: React.FC<CandidateDashboardProps> = ({
             <div className="flex items-center justify-between text-[11px] text-neutral-500 dark:text-neutral-400">
               <span>Resume: {hasResume ? 'Parsed & Active' : 'Missing'}</span>
               <button
-                onClick={() => onNavigateTab('candidate-profile')}
-                className="text-neutral-900 dark:text-neutral-200 font-semibold hover:underline"
+                onClick={() => onNavigateTab('user-profile')}
+                className="text-neutral-900 dark:text-neutral-200 font-semibold hover:underline cursor-pointer"
               >
                 Update Profile →
               </button>

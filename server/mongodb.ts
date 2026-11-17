@@ -1,7 +1,6 @@
 import { MongoClient, Db } from 'mongodb';
 
-const DEFAULT_MONGO_URI = 'mongodb+srv://pulseAI:RMuUFfSSJDKRQ7L6@cluster0.tdxqltg.mongodb.net/?retryWrites=true&w=majority';
-const MONGODB_URI = process.env.MONGODB_URI || DEFAULT_MONGO_URI;
+const MONGODB_URI = process.env.MONGODB_URI || '';
 const MONGODB_DB_NAME = process.env.MONGODB_DB_NAME || 'talentpulse_db';
 
 let client: MongoClient | null = null;

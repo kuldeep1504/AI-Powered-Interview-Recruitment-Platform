@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ATSAnalysisResult, ATSCorrectionResult, CandidateProfile } from '../types.ts';
 import {
   X,
@@ -88,6 +88,22 @@ JavaScript, TypeScript, React, Node.js, Express, PostgreSQL, Docker, Git`;
   const [isDragOver, setIsDragOver] = useState(false);
   const [showExtractedPreview, setShowExtractedPreview] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (candidateProfile?.headline?.trim()) {
+      setTargetRole(candidateProfile.headline.trim());
+    }
+    if (initialResumeText && initialResumeText.trim()) {
+      setResumeText(initialResumeText);
+      setInputMethod('text');
+      setUploadedFile(null);
+      setAnalysisResult(null);
+      setCorrectionResult(null);
+      setErrorMessage(null);
+      setAppliedSuccess(false);
+    }
+  }, [isOpen, initialResumeText, candidateProfile]);
 
   if (!isOpen) return null;
 
@@ -382,6 +398,22 @@ B.S. in Computer Science — IIT (2017)`);
             >
               <X className="w-3.5 h-3.5" />
             </button>
+          </div>
+        )}
+
+        {/* Active My Resume Source Banner */}
+        {initialResumeText && initialResumeText.trim() && (
+          <div className="flex items-center justify-between p-3 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 text-xs">
+            <div className="flex items-center space-x-2">
+              <FileCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>
+                Loaded resume from <span className="font-bold">My Resume</span>
+                {candidateProfile?.resumeFileName ? ` (${candidateProfile.resumeFileName})` : ''}.
+              </span>
+            </div>
+            <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+              {resumeText.trim().split(/\s+/).filter(Boolean).length} words
+            </span>
           </div>
         )}
 

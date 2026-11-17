@@ -655,9 +655,10 @@ class Database {
     // 2. Asynchronously upsert to MongoDB when connected
     const mongoDb = getMongoDb();
     if (mongoDb && collectionName && document && document.id) {
+      const { _id: _ignored, ...cleanDoc } = document;
       mongoDb.collection(collectionName).updateOne(
-        { id: document.id } as any,
-        { $set: document },
+        { id: cleanDoc.id } as any,
+        { $set: cleanDoc },
         { upsert: true }
       ).catch((err) => {
         console.warn(`⚠️ [MongoDB] Failed to upsert to collection "${collectionName}":`, err.message);
@@ -680,7 +681,7 @@ class Database {
 
   createUser(user: User): User {
     this.data.users.push(user);
-    this.persist();
+    this.persist('users', user);
     return user;
   }
 
@@ -688,7 +689,7 @@ class Database {
     const idx = this.data.users.findIndex((u) => u.id === id);
     if (idx === -1) return null;
     this.data.users[idx] = { ...this.data.users[idx], ...updates };
-    this.persist();
+    this.persist('users', this.data.users[idx]);
     return this.data.users[idx];
   }
 
@@ -709,11 +710,11 @@ class Database {
     const idx = this.data.candidates.findIndex((c) => c.id === profile.id || c.userId === profile.userId);
     if (idx >= 0) {
       this.data.candidates[idx] = { ...this.data.candidates[idx], ...profile, updatedAt: new Date().toISOString() };
-      this.persist();
+      this.persist('candidates', this.data.candidates[idx]);
       return this.data.candidates[idx];
     } else {
       this.data.candidates.push(profile);
-      this.persist();
+      this.persist('candidates', profile);
       return profile;
     }
   }
@@ -731,11 +732,11 @@ class Database {
     const idx = this.data.recruiters.findIndex((r) => r.id === profile.id || r.userId === profile.userId);
     if (idx >= 0) {
       this.data.recruiters[idx] = { ...this.data.recruiters[idx], ...profile, updatedAt: new Date().toISOString() };
-      this.persist();
+      this.persist('recruiters', this.data.recruiters[idx]);
       return this.data.recruiters[idx];
     } else {
       this.data.recruiters.push(profile);
-      this.persist();
+      this.persist('recruiters', profile);
       return profile;
     }
   }
@@ -751,7 +752,7 @@ class Database {
 
   createJob(job: Job): Job {
     this.data.jobs.unshift(job);
-    this.persist();
+    this.persist('jobs', job);
     return job;
   }
 
@@ -759,7 +760,7 @@ class Database {
     const idx = this.data.jobs.findIndex((j) => j.id === id);
     if (idx === -1) return null;
     this.data.jobs[idx] = { ...this.data.jobs[idx], ...updates, updatedAt: new Date().toISOString() };
-    this.persist();
+    this.persist('jobs', this.data.jobs[idx]);
     return this.data.jobs[idx];
   }
 
@@ -768,6 +769,12 @@ class Database {
     this.data.jobs = this.data.jobs.filter((j) => j.id !== id);
     if (this.data.jobs.length !== len) {
       this.persist();
+      const mongoDb = getMongoDb();
+      if (mongoDb) {
+        mongoDb.collection('jobs').deleteOne({ id } as any).catch((err) => {
+          console.warn('⚠️ [MongoDB] Failed to delete job:', err.message);
+        });
+      }
       return true;
     }
     return false;
@@ -796,8 +803,9 @@ class Database {
     const job = this.data.jobs.find((j) => j.id === app.jobId);
     if (job) {
       job.applicantCount = (job.applicantCount || 0) + 1;
+      this.persist('jobs', job);
     }
-    this.persist();
+    this.persist('applications', app);
     return app;
   }
 
@@ -809,7 +817,7 @@ class Database {
       ...updates,
       updatedAt: new Date().toISOString(),
     };
-    this.persist();
+    this.persist('applications', this.data.applications[idx]);
     return this.data.applications[idx];
   }
 
@@ -829,8 +837,9 @@ class Database {
     if (app) {
       app.status = 'INTERVIEW_SCHEDULED';
       app.interviewsCount = (app.interviewsCount || 0) + 1;
+      this.persist('applications', app);
     }
-    this.persist();
+    this.persist('interviews', interview);
     return interview;
   }
 
@@ -838,7 +847,7 @@ class Database {
     const idx = this.data.interviews.findIndex((i) => i.id === id);
     if (idx === -1) return null;
     this.data.interviews[idx] = { ...this.data.interviews[idx], ...updates };
-    this.persist();
+    this.persist('interviews', this.data.interviews[idx]);
     return this.data.interviews[idx];
   }
 
@@ -861,8 +870,9 @@ class Database {
     const interview = this.data.interviews.find((i) => i.id === result.interviewId);
     if (interview) {
       interview.status = 'COMPLETED';
+      this.persist('interviews', interview);
     }
-    this.persist();
+    this.persist('interviewResults', result);
     return result;
   }
 
@@ -876,7 +886,7 @@ class Database {
   createNotification(notification: AppNotification): AppNotification {
     if (!this.data.notifications) this.data.notifications = [];
     this.data.notifications.unshift(notification);
-    this.persist();
+    this.persist('notifications', notification);
     return notification;
   }
 
@@ -885,7 +895,7 @@ class Database {
     const notif = this.data.notifications.find((n) => n.id === id);
     if (notif) {
       notif.read = true;
-      this.persist();
+      this.persist('notifications', notif);
       return true;
     }
     return false;
@@ -896,20 +906,26 @@ class Database {
     this.data.notifications.forEach((n) => {
       if (!userId || n.userId === userId || n.userId === 'all') {
         n.read = true;
+        this.persist('notifications', n);
       }
     });
-    this.persist();
     return true;
   }
 
   // Admin Metrics
   getAdminMetrics() {
+    const activeCandidates = this.data.users.filter((u) => u.role === 'candidate' && u.status === 'active').length;
+    const activeRecruiters = this.data.users.filter((u) => u.role === 'recruiter' && u.status === 'active').length;
     return {
       totalUsers: this.data.users.length,
+      activeCandidates,
+      activeRecruiters,
       candidatesCount: this.data.candidates.length,
       recruitersCount: this.data.recruiters.length,
+      totalJobs: this.data.jobs.length,
       jobsCount: this.data.jobs.length,
       openJobsCount: this.data.jobs.filter((j) => j.status === 'OPEN').length,
+      totalApplications: this.data.applications.length,
       applicationsCount: this.data.applications.length,
       interviewsConducted: this.data.interviews.filter((i) => i.status === 'COMPLETED').length,
       avgMatchScore:
