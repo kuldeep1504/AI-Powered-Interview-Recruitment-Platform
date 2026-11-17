@@ -25,12 +25,14 @@ import {
 
 interface InterviewRoomProps {
   interview: Interview;
+  profileUserName?: string;
   onClose: () => void;
   onInterviewCompleted: (result: InterviewResult) => void;
 }
 
 export const InterviewRoom: React.FC<InterviewRoomProps> = ({
   interview,
+  profileUserName,
   onClose,
   onInterviewCompleted,
 }) => {
@@ -478,7 +480,7 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({
               <div className="absolute top-3 left-3 flex items-center space-x-2 z-10">
                 <span className="px-2 py-0.5 text-[11px] font-semibold rounded-md bg-neutral-800/90 text-neutral-300 border border-neutral-700 flex items-center">
                   <User className="w-3 h-3 mr-1 text-blue-400" />
-                  {interview.candidateName} (You)
+                  {profileUserName || interview.candidateName} (You)
                 </span>
               </div>
 

@@ -200,8 +200,13 @@ export default function App() {
 
   // Quick Open Live Interview Room
   const handleOpenInterviewQuick = () => {
-    if (interviews.length > 0) {
-      const scheduled = interviews.find((i) => i.status !== 'COMPLETED') || interviews[0];
+    const myInterviews = interviews.filter(
+      (i) =>
+        (candidateProfile && i.candidateId === candidateProfile.id) ||
+        (currentUser?.email && i.candidateEmail?.toLowerCase() === currentUser.email.toLowerCase())
+    );
+    if (myInterviews.length > 0) {
+      const scheduled = myInterviews.find((i) => i.status !== 'COMPLETED') || myInterviews[0];
       setActiveInterviewRoom(scheduled);
     } else if (jobs.length > 0 && candidateProfile) {
       // Create quick on-demand interview
@@ -209,7 +214,7 @@ export default function App() {
         id: `int-${Date.now()}`,
         applicationId: applications[0]?.id || 'app-1',
         candidateId: candidateProfile.id,
-        candidateName: candidateProfile.parsedResumeData?.name || 'Alex Rivera',
+        candidateName: currentUser?.name || candidateProfile.parsedResumeData?.name || 'Candidate',
         jobId: jobs[0].id,
         jobTitle: jobs[0].title,
         companyName: jobs[0].companyName,
@@ -564,7 +569,7 @@ export default function App() {
       id: `int-${Date.now()}`,
       applicationId: applications[0]?.id || 'app-track-mock',
       candidateId: candidateProfile.id,
-      candidateName: candidateProfile.parsedResumeData?.name || (isFresher ? 'David Chen' : 'Alex Rivera'),
+      candidateName: currentUser?.name || candidateProfile.parsedResumeData?.name || 'Candidate',
       jobId: jobs[0]?.id || 'job-track',
       jobTitle,
       companyName,
@@ -869,6 +874,7 @@ export default function App() {
       {activeInterviewRoom && (
         <InterviewRoom
           interview={activeInterviewRoom}
+          profileUserName={currentUser.name}
           onClose={() => setActiveInterviewRoom(null)}
           onInterviewCompleted={(result) => {
             setActiveInterviewRoom(null);
