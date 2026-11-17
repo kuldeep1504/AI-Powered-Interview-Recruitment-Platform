@@ -15,6 +15,7 @@ import {
   analyzeResumeATSScoreWithAI,
   correctAndOptimizeResumeWithAI,
   extractTextFromFileWithAI,
+  generateAITaskInterviewWithAI,
 } from './server/gemini.ts';
 import { Job, CandidateProfile, Application, Interview, InterviewResult, User } from './src/types.ts';
 
@@ -175,6 +176,117 @@ function syncCandidateRecordsWithProfile(userId: string) {
         db.saveInterviewResult({ ...resItem, candidateName: syncedName });
       }
     });
+}
+
+function normalizeDateStr(clientDate?: unknown): string {
+  if (typeof clientDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(clientDate.trim())) {
+    return clientDate.trim();
+  }
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getPreviousDateStr(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  return dt.toISOString().slice(0, 10);
+}
+
+async function createAndSaveAITaskInterview(
+  candidate: CandidateProfile,
+  candUser?: User,
+  focusArea?: string
+): Promise<Interview> {
+  const jobs = db.getJobs();
+  const recentCandidateInterviews = db
+    .getInterviews()
+    .filter(
+      (i) =>
+        i.candidateId === candidate.id ||
+        (candUser?.email && i.candidateEmail?.toLowerCase() === candUser.email.toLowerCase())
+    );
+  const recentTopics = recentCandidateInterviews.slice(0, 8).map((i) => i.jobTitle);
+
+  const generated = await generateAITaskInterviewWithAI(candidate, jobs, focusArea, recentTopics);
+  const syncedName = candUser?.name || candidate.parsedResumeData?.name || 'Candidate';
+
+  const newInterview: Interview = {
+    id: `int-ai-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    applicationId: 'app-ai-task',
+    candidateId: candidate.id,
+    candidateName: syncedName,
+    candidateEmail: candUser?.email || candidate.parsedResumeData?.email,
+    candidateHeadline: resolveCandidateHeadline(candidate),
+    candidateAvatar: candUser?.avatar,
+    jobId: jobs[0]?.id || 'job-ai-task',
+    jobTitle: generated.title,
+    companyName: 'TalentPulse AI Coach',
+    recruiterId: 'rec-ai',
+    type: generated.interviewType,
+    scheduledAt: new Date().toISOString(),
+    durationMinutes: 25,
+    difficulty: generated.difficulty,
+    topicCount: generated.questions.length,
+    status: 'SCHEDULED',
+    meetingId: `ai-task-${Math.random().toString(36).substring(2, 9)}`,
+    questions: generated.questions,
+    currentQuestionIndex: 0,
+    isAITask: true,
+    taskFocus: generated.taskFocus,
+    rewardPoints: 10,
+    createdAt: new Date().toISOString(),
+  };
+
+  db.createInterview(newInterview);
+  return newInterview;
+}
+
+function awardInterviewPointsAndStreak(candidate: CandidateProfile, todayStr: string, pointsPerInterview = 10) {
+  const prevDate = candidate.lastCompletedDate;
+  const yesterdayStr = getPreviousDateStr(todayStr);
+
+  let nextStreak = candidate.currentStreak || 0;
+  let streakIncreased = false;
+
+  if (prevDate === todayStr) {
+    nextStreak = Math.max(1, nextStreak);
+  } else if (prevDate === yesterdayStr) {
+    nextStreak = nextStreak + 1;
+    streakIncreased = true;
+  } else {
+    nextStreak = 1;
+    streakIncreased = true;
+  }
+
+  const nextLongest = Math.max(candidate.longestStreak || 0, nextStreak);
+  const nextPoints = (candidate.totalPoints || 0) + pointsPerInterview;
+  const nextCompletedCount = (candidate.completedTasksCount || 0) + 1;
+  const nextDates = Array.from(new Set([...(candidate.completedDates || []), todayStr])).sort().slice(-90);
+
+  const updatedProfile = db.upsertCandidate({
+    ...candidate,
+    totalPoints: nextPoints,
+    completedTasksCount: nextCompletedCount,
+    currentStreak: nextStreak,
+    longestStreak: nextLongest,
+    lastCompletedDate: todayStr,
+    completedDates: nextDates,
+    updatedAt: new Date().toISOString(),
+  });
+
+  return {
+    updatedProfile,
+    gamification: {
+      pointsAwarded: pointsPerInterview,
+      totalPoints: nextPoints,
+      completedTasksCount: nextCompletedCount,
+      currentStreak: nextStreak,
+      longestStreak: nextLongest,
+      lastCompletedDate: todayStr,
+      completedDates: nextDates,
+      streakIncreased,
+    },
+  };
 }
 
 async function startServer() {
@@ -831,13 +943,57 @@ async function startServer() {
   });
 
   // ---------------- INTERVIEWS API ----------------
-  app.get('/api/interviews', requireAuth, (req, res) => {
-    const { candidateId, recruiterId, status } = req.query;
-    let list = db.getInterviews();
-    if (candidateId) list = list.filter((i) => i.candidateId === candidateId);
-    if (recruiterId) list = list.filter((i) => i.recruiterId === recruiterId);
-    if (status) list = list.filter((i) => i.status === status);
-    res.json({ interviews: list.map(enrichInterview) });
+  app.get('/api/interviews', requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).currentUser as User;
+      const { candidateId, recruiterId, status } = req.query;
+      let list = db.getInterviews();
+
+      if (reqUser.role === 'candidate') {
+        const candidate = ensureCandidateProfile(reqUser.id);
+        list = list.filter(
+          (i) =>
+            i.candidateId === candidate.id ||
+            (reqUser.email && i.candidateEmail?.toLowerCase() === reqUser.email.toLowerCase())
+        );
+
+        const activeForCandidate = list.filter(
+          (i) => i.status !== 'COMPLETED' && i.status !== 'CANCELLED'
+        );
+
+        // Always keep at least one AI Task Interview available for the candidate
+        if (activeForCandidate.length === 0) {
+          const generatedTask = await createAndSaveAITaskInterview(candidate, reqUser);
+          list = [generatedTask, ...list];
+        }
+      } else {
+        if (candidateId) list = list.filter((i) => i.candidateId === candidateId);
+        if (recruiterId) list = list.filter((i) => i.recruiterId === recruiterId);
+      }
+
+      if (status) list = list.filter((i) => i.status === status);
+      res.json({ interviews: list.map(enrichInterview) });
+    } catch (err: any) {
+      console.error('Get interviews error:', err);
+      res.status(500).json({ error: 'Failed to load interviews', details: err.message });
+    }
+  });
+
+  app.post('/api/interviews/ai-task/generate', requireAuth, async (req, res) => {
+    try {
+      const reqUser = (req as any).currentUser as User;
+      const { focusArea } = req.body || {};
+      const candidate = ensureCandidateProfile(reqUser.id);
+      const newTask = await createAndSaveAITaskInterview(
+        candidate,
+        reqUser,
+        typeof focusArea === 'string' && focusArea.trim() ? focusArea.trim() : undefined
+      );
+      res.status(201).json({ interview: enrichInterview(newTask) });
+    } catch (err: any) {
+      console.error('Generate AI task interview error:', err);
+      res.status(500).json({ error: 'Failed to generate AI task interview', details: err.message });
+    }
   });
 
   app.get('/api/interviews/:id', requireAuth, (req, res) => {
@@ -1101,12 +1257,67 @@ async function startServer() {
 
   app.post('/api/interviews/:id/complete', async (req, res) => {
     try {
-      const { answers, consentGiven } = req.body;
+      const { answers, consentGiven, clientDate } = req.body;
+      const reqUser = (req as any).currentUser as User | undefined;
       const interview = db.getInterviewById(req.params.id);
       if (!interview) return res.status(404).json({ error: 'Interview not found' });
 
-      // Generate comprehensive dual-perspective summary & scoring
-      const summary = await summarizeInterviewWithAI(interview, answers || []);
+      const wasAlreadyCompleted = interview.status === 'COMPLETED';
+      const todayStr = normalizeDateStr(clientDate);
+
+      const { candidate: resolvedCand, candUser } = resolveCandidateAndUser(
+        interview.candidateId,
+        interview.candidateEmail
+      );
+      const targetCand =
+        resolvedCand || (reqUser ? ensureCandidateProfile(reqUser.id) : undefined);
+
+      let updatedCandidate = targetCand;
+      let gamification = targetCand
+        ? {
+            pointsAwarded: 0,
+            totalPoints: targetCand.totalPoints || 0,
+            completedTasksCount: targetCand.completedTasksCount || 0,
+            currentStreak: targetCand.currentStreak || 0,
+            longestStreak: targetCand.longestStreak || 0,
+            lastCompletedDate: targetCand.lastCompletedDate,
+            completedDates: targetCand.completedDates || [],
+            streakIncreased: false,
+          }
+        : undefined;
+
+      if (targetCand && !wasAlreadyCompleted) {
+        const awarded = awardInterviewPointsAndStreak(
+          targetCand,
+          todayStr,
+          interview.rewardPoints || 10
+        );
+        updatedCandidate = awarded.updatedProfile;
+        gamification = awarded.gamification;
+      }
+
+      const shouldGenerateNext = Boolean(
+        updatedCandidate &&
+          !wasAlreadyCompleted &&
+          db
+            .getInterviews()
+            .filter(
+              (i) =>
+                i.id !== interview.id &&
+                i.status !== 'COMPLETED' &&
+                i.status !== 'CANCELLED' &&
+                (i.candidateId === updatedCandidate!.id ||
+                  (candUser?.email && i.candidateEmail?.toLowerCase() === candUser.email.toLowerCase()))
+            ).length < 3
+      );
+
+      // Run AI interview summarization & next AI task generation in parallel
+      const [summary, nextInterview] = await Promise.all([
+        summarizeInterviewWithAI(interview, answers || []),
+        shouldGenerateNext && updatedCandidate
+          ? createAndSaveAITaskInterview(updatedCandidate, candUser || reqUser)
+          : Promise.resolve(null),
+      ]);
 
       const finalResult: InterviewResult = {
         id: `res-${Date.now()}`,
@@ -1123,6 +1334,16 @@ async function startServer() {
         transcriptFull: summary.transcriptFull,
         consentGiven: !!consentGiven,
         evaluatedAt: new Date().toISOString(),
+        ...(gamification
+          ? {
+              pointsAwarded: gamification.pointsAwarded,
+              totalPoints: gamification.totalPoints,
+              currentStreak: gamification.currentStreak,
+              longestStreak: gamification.longestStreak,
+              completedTasksCount: gamification.completedTasksCount,
+              streakIncreased: gamification.streakIncreased,
+            }
+          : {}),
       };
 
       db.saveInterviewResult(finalResult);
@@ -1137,31 +1358,37 @@ async function startServer() {
       }
 
       // Notifications on completion (SRS Section 24)
-      const cand = db.getCandidateById(interview.candidateId);
-      if (cand) {
+      if (updatedCandidate) {
         db.createNotification({
           id: `notif-${Date.now()}-comp-cand`,
-          userId: cand.userId,
-          title: 'Interview Evaluation Report Ready',
-          message: `Your comprehensive AI evaluation for ${interview.jobTitle} is ready. Overall Advisory Score: ${finalResult.overallScore}/100.`,
+          userId: updatedCandidate.userId,
+          title: 'Interview Completed (+10 Points!)',
+          message: `Scored ${finalResult.overallScore}/100 on ${interview.jobTitle}. Earned +${gamification?.pointsAwarded || 10} pts (Streak: ${gamification?.currentStreak || 1}d). A new AI Task Interview has been added!`,
           type: 'interview_completed',
           read: false,
           timestamp: new Date().toISOString(),
           linkTab: 'candidate-dashboard',
         });
       }
-      db.createNotification({
-        id: `notif-${Date.now()}-comp-rec`,
-        userId: 'usr-rec-1',
-        title: 'Candidate Interview Completed',
-        message: `${interview.candidateName} completed ${interview.type}. AI Recommendation: ${finalResult.feedbackForRecruiter.humanRecommendationAdvisory}.`,
-        type: 'interview_completed',
-        read: false,
-        timestamp: new Date().toISOString(),
-        linkTab: 'recruiter-dashboard',
-      });
+      if (!interview.isAITask) {
+        db.createNotification({
+          id: `notif-${Date.now()}-comp-rec`,
+          userId: 'usr-rec-1',
+          title: 'Candidate Interview Completed',
+          message: `${interview.candidateName} completed ${interview.type}. AI Recommendation: ${finalResult.feedbackForRecruiter.humanRecommendationAdvisory}.`,
+          type: 'interview_completed',
+          read: false,
+          timestamp: new Date().toISOString(),
+          linkTab: 'recruiter-dashboard',
+        });
+      }
 
-      res.json({ result: finalResult });
+      res.json({
+        result: finalResult,
+        profile: updatedCandidate,
+        nextInterview: nextInterview ? enrichInterview(nextInterview) : null,
+        gamification,
+      });
     } catch (err: any) {
       console.error('Interview completion error:', err);
       res.status(500).json({ error: 'Failed to finalize interview report', details: err.message });

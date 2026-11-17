@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Interview, InterviewQuestion, InterviewAnswerSubmission, InterviewResult } from '../types.ts';
+import {
+  Interview,
+  InterviewQuestion,
+  InterviewAnswerSubmission,
+  InterviewResult,
+  CandidateProfile,
+} from '../types.ts';
 import {
   Video,
   VideoOff,
@@ -27,7 +33,10 @@ interface InterviewRoomProps {
   interview: Interview;
   profileUserName?: string;
   onClose: () => void;
-  onInterviewCompleted: (result: InterviewResult) => void;
+  onInterviewCompleted: (
+    result: InterviewResult,
+    payload?: { profile?: CandidateProfile; nextInterview?: Interview | null }
+  ) => void;
 }
 
 export const InterviewRoom: React.FC<InterviewRoomProps> = ({
@@ -292,18 +301,26 @@ export const InterviewRoom: React.FC<InterviewRoomProps> = ({
   const handleFinalizeSession = async () => {
     setIsFinalizingReport(true);
     try {
+      const now = new Date();
+      const clientDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       const res = await fetch(`/api/interviews/${interview.id}/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           answers: recordedAnswers,
           consentGiven: true,
+          clientDate,
         }),
       });
 
       const data = await res.json();
       if (data.result) {
-        onInterviewCompleted(data.result);
+        onInterviewCompleted(data.result, {
+          profile: data.profile,
+          nextInterview: data.nextInterview,
+        });
+      } else {
+        alert(data.error || 'Failed to finalize interview report.');
       }
     } catch (err: any) {
       alert('Failed to finalize interview report: ' + err.message);

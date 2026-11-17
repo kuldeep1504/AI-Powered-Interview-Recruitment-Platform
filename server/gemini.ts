@@ -405,6 +405,346 @@ Ensure:
   return fallbackQuestions(job, candidateProfile, interviewType, difficulty, count);
 }
 
+export interface GeneratedAITaskInterview {
+  title: string;
+  taskFocus: string;
+  interviewType: 'AI Technical' | 'AI HR' | 'Mixed';
+  difficulty: 'Junior' | 'Mid-Level' | 'Senior' | 'Lead';
+  questions: InterviewQuestion[];
+}
+
+export async function generateAITaskInterviewWithAI(
+  candidateProfile: CandidateProfile,
+  jobs: Job[],
+  focusArea?: string,
+  recentTopics: string[] = []
+): Promise<GeneratedAITaskInterview> {
+  const isFresher = candidateProfile.experienceTrack === 'fresher' || (candidateProfile.yearsOfExperience || 0) <= 1;
+  const targetRole = isFresher
+    ? candidateProfile.fresherDetails?.targetRole || 'Junior Software Engineer'
+    : candidateProfile.experiencedDetails?.currentRole || candidateProfile.headline || 'Software Engineer';
+  const skillsList = (
+    candidateProfile.skills?.length
+      ? candidateProfile.skills
+      : isFresher
+        ? ['Data Structures', 'Algorithms', 'OOP', 'JavaScript', 'React', 'SQL']
+        : ['TypeScript', 'Node.js', 'React', 'System Design', 'PostgreSQL', 'Docker']
+  ).slice(0, 10);
+
+  const recommendedJob = jobs[0];
+  const desiredDifficulty: 'Junior' | 'Mid-Level' | 'Senior' = isFresher
+    ? 'Junior'
+    : (candidateProfile.yearsOfExperience || 0) >= 5
+      ? 'Senior'
+      : 'Mid-Level';
+
+  const prompt = `Create a fresh, engaging daily AI Interview Practice Task for a candidate.
+Candidate Profile:
+- Track: ${isFresher ? 'Fresher / Entry-Level Graduate' : `Experienced (${candidateProfile.yearsOfExperience || 3} years)`}
+- Target Role: ${targetRole}
+- Skills: ${skillsList.join(', ')}
+- Requested Focus Area: ${focusArea || (isFresher ? 'Core CS, Project Defense & Problem Solving' : 'System Design, Production Engineering & Leadership')}
+${recommendedJob ? `- Market Job Context: ${recommendedJob.title} (${recommendedJob.skills.required.slice(0, 5).join(', ')})` : ''}
+${recentTopics.length ? `- Avoid repeating these recent task titles/topics: ${recentTopics.slice(0, 8).join(' | ')}` : ''}
+
+Generate:
+1. A crisp, specific task title (e.g., "AI Task: Distributed Caching & Rate Limiting" or "AI Task: HashMaps, Recursion & SQL Joins").
+2. A short taskFocus label (2-5 words).
+3. interviewType: one of "AI Technical", "AI HR", or "Mixed".
+4. Exactly 3 distinct, practical interview questions with expectedKeyPoints (3 items each), suggestedDurationSeconds (120-180), category ("Technical", "Behavioral (STAR)", "HR & Culture", or "System Architecture"), and difficulty ("Easy", "Medium", or "Hard").`;
+
+  const response = await generateContentWithFailover({
+    contents: prompt,
+    config: {
+      systemInstruction:
+        'You are an adaptive AI career coach and technical interviewer creating unique daily interview tasks tailored to a candidate profile.',
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+          taskFocus: { type: Type.STRING },
+          interviewType: { type: Type.STRING },
+          questions: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                category: { type: Type.STRING },
+                question: { type: Type.STRING },
+                expectedKeyPoints: { type: Type.ARRAY, items: { type: Type.STRING } },
+                suggestedDurationSeconds: { type: Type.INTEGER },
+                difficulty: { type: Type.STRING },
+              },
+              required: ['id', 'category', 'question', 'expectedKeyPoints', 'suggestedDurationSeconds', 'difficulty'],
+            },
+          },
+        },
+        required: ['title', 'taskFocus', 'interviewType', 'questions'],
+      },
+    },
+  });
+
+  if (response?.text) {
+    try {
+      const parsed = JSON.parse(response.text.trim());
+      if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+        const validType =
+          parsed.interviewType === 'AI HR' || parsed.interviewType === 'Mixed'
+            ? parsed.interviewType
+            : 'AI Technical';
+        return {
+          title: parsed.title || `AI Task: ${focusArea || targetRole}`,
+          taskFocus: parsed.taskFocus || focusArea || (isFresher ? 'Core CS & Readiness' : 'Technical & Architecture'),
+          interviewType: validType,
+          difficulty: desiredDifficulty,
+          questions: parsed.questions.slice(0, 4).map((q: any, idx: number) => ({
+            id: `q-ai-${Date.now()}-${idx}`,
+            category:
+              q.category === 'Behavioral (STAR)' ||
+              q.category === 'HR & Culture' ||
+              q.category === 'System Architecture'
+                ? q.category
+                : 'Technical',
+            question: String(q.question || ''),
+            expectedKeyPoints: Array.isArray(q.expectedKeyPoints) ? q.expectedKeyPoints.map(String) : ['Core principles', 'Clear structure'],
+            suggestedDurationSeconds: Number(q.suggestedDurationSeconds) || 150,
+            difficulty: q.difficulty === 'Easy' || q.difficulty === 'Hard' ? q.difficulty : 'Medium',
+          })),
+        };
+      }
+    } catch {
+      // Fallback below
+    }
+  }
+
+  return fallbackAITaskInterview(candidateProfile, focusArea, recentTopics, desiredDifficulty);
+}
+
+function fallbackAITaskInterview(
+  candidateProfile: CandidateProfile,
+  focusArea: string | undefined,
+  recentTopics: string[],
+  difficulty: 'Junior' | 'Mid-Level' | 'Senior'
+): GeneratedAITaskInterview {
+  const isFresher = difficulty === 'Junior';
+  const fresherPool: GeneratedAITaskInterview[] = [
+    {
+      title: 'AI Task: Data Structures, HashMaps & Time Complexity',
+      taskFocus: focusArea || 'DSA & Core CS',
+      interviewType: 'AI Technical',
+      difficulty: 'Junior',
+      questions: [
+        {
+          id: `q-ai-${Date.now()}-1`,
+          category: 'Technical',
+          question: 'Explain how a HashMap handles collisions internally and compare Separate Chaining vs Open Addressing in terms of cache locality and worst-case lookup complexity.',
+          expectedKeyPoints: ['Hash bucket indexing', 'Chaining vs probing trade-offs', 'O(1) average vs O(N) worst case'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Medium',
+        },
+        {
+          id: `q-ai-${Date.now()}-2`,
+          category: 'Technical',
+          question: 'When would you choose a LinkedList or Queue over a dynamic contiguous Array, and why do modern CPUs often favor arrays?',
+          expectedKeyPoints: ['CPU cache locality', 'O(1) head/tail operations vs random access', 'Memory allocation overhead'],
+          suggestedDurationSeconds: 120,
+          difficulty: 'Easy',
+        },
+        {
+          id: `q-ai-${Date.now()}-3`,
+          category: 'Behavioral (STAR)',
+          question: 'Tell me about a tough bug you encountered in a college or personal coding project. How did you isolate the root cause and verify your fix?',
+          expectedKeyPoints: ['Systematic debugging steps', 'Root cause analysis', 'Testing & verification'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Easy',
+        },
+      ],
+    },
+    {
+      title: 'AI Task: DBMS Transactions, SQL Joins & REST APIs',
+      taskFocus: focusArea || 'Backend & Databases',
+      interviewType: 'AI Technical',
+      difficulty: 'Junior',
+      questions: [
+        {
+          id: `q-ai-${Date.now()}-1`,
+          category: 'Technical',
+          question: 'Walk through the ACID properties of relational databases with a real-world payment or booking transaction example.',
+          expectedKeyPoints: ['Atomicity & rollback', 'Consistency & constraints', 'Isolation levels & Durability'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Medium',
+        },
+        {
+          id: `q-ai-${Date.now()}-2`,
+          category: 'Technical',
+          question: 'What happens under the hood from the moment a browser sends an HTTPS request to a REST API until the JSON response renders in React?',
+          expectedKeyPoints: ['DNS & TLS handshake', 'HTTP verbs & status codes', 'State update and DOM reconciliation'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Medium',
+        },
+        {
+          id: `q-ai-${Date.now()}-3`,
+          category: 'HR & Culture',
+          question: 'How do you approach learning a brand-new framework or codebase quickly during your first few weeks on a team?',
+          expectedKeyPoints: ['Reading docs & tests first', 'Building small prototypes', 'Asking focused questions'],
+          suggestedDurationSeconds: 120,
+          difficulty: 'Easy',
+        },
+      ],
+    },
+    {
+      title: 'AI Task: OOP Design, Operating Systems & Project Defense',
+      taskFocus: focusArea || 'OOP & Project Defense',
+      interviewType: 'Mixed',
+      difficulty: 'Junior',
+      questions: [
+        {
+          id: `q-ai-${Date.now()}-1`,
+          category: 'Technical',
+          question: 'Explain the 4 pillars of Object-Oriented Programming and when composition is preferable to inheritance in real software.',
+          expectedKeyPoints: ['Encapsulation, Abstraction, Inheritance, Polymorphism', 'Tight coupling pitfall of deep inheritance', 'Composition flexibility'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Medium',
+        },
+        {
+          id: `q-ai-${Date.now()}-2`,
+          category: 'Technical',
+          question: 'What is the difference between a Process and a Thread, and how do deadlocks occur when multiple threads share resources?',
+          expectedKeyPoints: ['Isolated vs shared memory space', '4 Coffman deadlock conditions', 'Lock ordering / timeout mitigation'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Medium',
+        },
+        {
+          id: `q-ai-${Date.now()}-3`,
+          category: 'System Architecture',
+          question: 'Walk through your favorite software project: how did you structure its data flow, and what architectural improvement would you make today?',
+          expectedKeyPoints: ['Clear end-to-end architecture', 'Database or state trade-offs', 'Thoughtful reflection'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Medium',
+        },
+      ],
+    },
+  ];
+
+  const experiencedPool: GeneratedAITaskInterview[] = [
+    {
+      title: 'AI Task: Distributed Rate Limiting & Redis Architecture',
+      taskFocus: focusArea || 'System Design & Scale',
+      interviewType: 'AI Technical',
+      difficulty,
+      questions: [
+        {
+          id: `q-ai-${Date.now()}-1`,
+          category: 'System Architecture',
+          question: 'Design a distributed API rate limiter handling 250K req/sec across multiple regions. How do you ensure atomicity and avoid cross-region latency bottlenecks?',
+          expectedKeyPoints: ['Token bucket / sliding window algorithms', 'Redis Lua scripts for atomic counters', 'Local in-memory quota batching & graceful degradation'],
+          suggestedDurationSeconds: 180,
+          difficulty: 'Hard',
+        },
+        {
+          id: `q-ai-${Date.now()}-2`,
+          category: 'Technical',
+          question: 'How do you prevent cache stampedes (thundering herd) when a hot key expires in a high-traffic microservice tier?',
+          expectedKeyPoints: ['Single-flight / request coalescing', 'Probabilistic early expiration', 'Stale-while-revalidate & jittered TTLs'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Hard',
+        },
+        {
+          id: `q-ai-${Date.now()}-3`,
+          category: 'Behavioral (STAR)',
+          question: 'Describe a production bottleneck or P0 outage you helped resolve. How did you triage, mitigate user impact, and run the post-mortem?',
+          expectedKeyPoints: ['Fast mitigation before deep root cause', 'Telemetry & observability signals', 'Blameless action items'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Medium',
+        },
+      ],
+    },
+    {
+      title: 'AI Task: Event-Driven Microservices & Zero-Downtime Migrations',
+      taskFocus: focusArea || 'Backend & Reliability',
+      interviewType: 'AI Technical',
+      difficulty,
+      questions: [
+        {
+          id: `q-ai-${Date.now()}-1`,
+          category: 'System Architecture',
+          question: 'How do you execute a zero-downtime schema migration on a 100M-row PostgreSQL table under continuous production write traffic?',
+          expectedKeyPoints: ['Expand-and-contract pattern', 'Shadow column & dual-write', 'Batched backfill & atomic cutover'],
+          suggestedDurationSeconds: 180,
+          difficulty: 'Hard',
+        },
+        {
+          id: `q-ai-${Date.now()}-2`,
+          category: 'Technical',
+          question: 'In an event-driven architecture using Kafka or message queues, how do you guarantee idempotent processing and handle poison-pill messages?',
+          expectedKeyPoints: ['Idempotency keys & deduplication table', 'Dead-letter queues (DLQ)', 'Exponential backoff with jitter'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Hard',
+        },
+        {
+          id: `q-ai-${Date.now()}-3`,
+          category: 'HR & Culture',
+          question: 'Tell me about a time you pushed back on a complex architectural proposal in favor of a simpler solution. How did you align the team?',
+          expectedKeyPoints: ['Data/RFC-driven alignment', 'Operational simplicity & TCO', 'Constructive consensus'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Medium',
+        },
+      ],
+    },
+    {
+      title: 'AI Task: Real-Time WebRTC, Concurrency & Frontend Performance',
+      taskFocus: focusArea || 'Real-Time & Full-Stack',
+      interviewType: 'Mixed',
+      difficulty,
+      questions: [
+        {
+          id: `q-ai-${Date.now()}-1`,
+          category: 'System Architecture',
+          question: 'Compare Mesh, SFU, and MCU topologies for multi-party WebRTC video rooms and explain how you handle adaptive bitrate degradation.',
+          expectedKeyPoints: ['Bandwidth scaling trade-offs', 'SFU forwarding & simulcast/SVC', 'ICE/TURN fallback on symmetric NAT'],
+          suggestedDurationSeconds: 180,
+          difficulty: 'Hard',
+        },
+        {
+          id: `q-ai-${Date.now()}-2`,
+          category: 'Technical',
+          question: 'How do you diagnose and fix event-loop blocking or subtle memory leaks in long-running Node.js services under sustained WebSocket load?',
+          expectedKeyPoints: ['Heap snapshots & GC profiling', 'Event loop lag metrics', 'Listener cleanup & backpressure streams'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Hard',
+        },
+        {
+          id: `q-ai-${Date.now()}-3`,
+          category: 'Behavioral (STAR)',
+          question: 'How do you balance shipping urgent product features with paying down critical technical debt across sprints?',
+          expectedKeyPoints: ['Quantifying reliability risk', 'Incremental refactoring inside feature work', 'Transparent stakeholder trade-offs'],
+          suggestedDurationSeconds: 150,
+          difficulty: 'Medium',
+        },
+      ],
+    },
+  ];
+
+  const pool = isFresher ? fresherPool : experiencedPool;
+  const recentSet = new Set(recentTopics.map((t) => t.toLowerCase()));
+  const freshChoice = pool.find((item) => !recentSet.has(item.title.toLowerCase()));
+  const chosen = freshChoice || pool[recentTopics.length % pool.length];
+
+  return {
+    ...chosen,
+    title: focusArea && !chosen.title.toLowerCase().includes(focusArea.toLowerCase())
+      ? `AI Task: ${focusArea}`
+      : chosen.title,
+    taskFocus: focusArea || chosen.taskFocus,
+    questions: chosen.questions.map((q, idx) => ({
+      ...q,
+      id: `q-ai-${Date.now()}-${idx}`,
+    })),
+  };
+}
+
 export async function evaluateAnswerWithAI(
   question: InterviewQuestion | { question?: string; text?: string; category?: string; expectedKeyPoints?: string[] },
   answerTranscript: string

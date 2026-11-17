@@ -115,6 +115,12 @@ export interface CandidateProfile {
   fresherDetails?: FresherDetails;
   experiencedDetails?: ExperiencedDetails;
   onboardingCompleted?: boolean;
+  totalPoints?: number;
+  completedTasksCount?: number;
+  currentStreak?: number;
+  longestStreak?: number;
+  lastCompletedDate?: string;
+  completedDates?: string[];
   updatedAt: string;
 }
 
@@ -250,6 +256,9 @@ export interface Interview {
   meetingId: string;
   questions: InterviewQuestion[];
   currentQuestionIndex: number;
+  isAITask?: boolean;
+  taskFocus?: string;
+  rewardPoints?: number;
   createdAt: string;
 }
 
@@ -285,6 +294,12 @@ export interface InterviewResult {
   transcriptFull: string;
   consentGiven: boolean;
   evaluatedAt: string;
+  pointsAwarded?: number;
+  totalPoints?: number;
+  currentStreak?: number;
+  longestStreak?: number;
+  completedTasksCount?: number;
+  streakIncreased?: boolean;
 }
 
 export interface AIParsedResume {

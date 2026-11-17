@@ -253,6 +253,31 @@
         "immediateGoal": "campus_placements",
         "practiceTrack": "dsa_core"
       }
+    },
+    {
+      "id": "cand-1794933701505",
+      "userId": "usr-cand-3",
+      "headline": "Candidate",
+      "bio": "",
+      "location": "",
+      "phone": "",
+      "yearsOfExperience": 0,
+      "education": [],
+      "skills": [],
+      "experience": [],
+      "projects": [],
+      "certifications": [],
+      "links": {},
+      "onboardingCompleted": false,
+      "updatedAt": "2026-11-17T16:42:18.189Z",
+      "totalPoints": 10,
+      "completedTasksCount": 1,
+      "currentStreak": 1,
+      "longestStreak": 1,
+      "lastCompletedDate": "2026-11-17",
+      "completedDates": [
+        "2026-11-17"
+      ]
     }
   ],
   "recruiters": [
@@ -1197,6 +1222,195 @@
   ],
   "interviews": [
     {
+      "id": "int-ai-1794933761800-124",
+      "applicationId": "app-ai-task",
+      "candidateId": "cand-1794933701505",
+      "candidateName": "David Chen",
+      "candidateEmail": "david.chen@example.com",
+      "candidateHeadline": "Candidate",
+      "candidateAvatar": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
+      "jobId": "job-1",
+      "jobTitle": "AI Task: DBMS Transactions, SQL Joins & REST APIs",
+      "companyName": "TalentPulse AI Coach",
+      "recruiterId": "rec-ai",
+      "type": "AI Technical",
+      "scheduledAt": "2026-11-17T16:42:41.800Z",
+      "durationMinutes": 25,
+      "difficulty": "Junior",
+      "topicCount": 3,
+      "status": "SCHEDULED",
+      "meetingId": "ai-task-ij5jx3b",
+      "questions": [
+        {
+          "id": "q-ai-1794933761800-0",
+          "category": "Technical",
+          "question": "Walk through the ACID properties of relational databases with a real-world payment or booking transaction example.",
+          "expectedKeyPoints": [
+            "Atomicity & rollback",
+            "Consistency & constraints",
+            "Isolation levels & Durability"
+          ],
+          "suggestedDurationSeconds": 150,
+          "difficulty": "Medium"
+        },
+        {
+          "id": "q-ai-1794933761800-1",
+          "category": "Technical",
+          "question": "What happens under the hood from the moment a browser sends an HTTPS request to a REST API until the JSON response renders in React?",
+          "expectedKeyPoints": [
+            "DNS & TLS handshake",
+            "HTTP verbs & status codes",
+            "State update and DOM reconciliation"
+          ],
+          "suggestedDurationSeconds": 150,
+          "difficulty": "Medium"
+        },
+        {
+          "id": "q-ai-1794933761800-2",
+          "category": "HR & Culture",
+          "question": "How do you approach learning a brand-new framework or codebase quickly during your first few weeks on a team?",
+          "expectedKeyPoints": [
+            "Reading docs & tests first",
+            "Building small prototypes",
+            "Asking focused questions"
+          ],
+          "suggestedDurationSeconds": 120,
+          "difficulty": "Easy"
+        }
+      ],
+      "currentQuestionIndex": 0,
+      "isAITask": true,
+      "taskFocus": "Backend & Databases",
+      "rewardPoints": 10,
+      "createdAt": "2026-11-17T16:42:41.800Z"
+    },
+    {
+      "id": "int-ai-1794933754986-243",
+      "applicationId": "app-ai-task",
+      "candidateId": "cand-1794933701505",
+      "candidateName": "David Chen",
+      "candidateEmail": "david.chen@example.com",
+      "candidateHeadline": "Candidate",
+      "candidateAvatar": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
+      "jobId": "job-1",
+      "jobTitle": "AI Task: Real-Time State Synchronization & OOP Design",
+      "companyName": "TalentPulse AI Coach",
+      "recruiterId": "rec-ai",
+      "type": "Mixed",
+      "scheduledAt": "2026-11-17T16:42:34.986Z",
+      "durationMinutes": 25,
+      "difficulty": "Junior",
+      "topicCount": 3,
+      "status": "SCHEDULED",
+      "meetingId": "ai-task-0zcz2x7",
+      "questions": [
+        {
+          "id": "q-ai-1794933754986-0",
+          "category": "Technical",
+          "question": "How would you design a simple Observer pattern in JavaScript/TypeScript to manage real-time UI state updates when receiving data from a WebRTC stream?",
+          "expectedKeyPoints": [
+            "Definition of the Observer pattern structure",
+            "Efficient state change notifications",
+            "Decoupling data reception from UI rendering"
+          ],
+          "suggestedDurationSeconds": 180,
+          "difficulty": "Medium"
+        },
+        {
+          "id": "q-ai-1794933754986-1",
+          "category": "System Architecture",
+          "question": "If you are storing metadata for active WebRTC sessions in PostgreSQL, how would you optimize queries to handle frequent read/write operations for thousands of concurrent users?",
+          "expectedKeyPoints": [
+            "Indexing strategy on session IDs",
+            "Implementation of connection pooling",
+            "Consideration of denormalization or caching layers"
+          ],
+          "suggestedDurationSeconds": 180,
+          "difficulty": "Medium"
+        },
+        {
+          "id": "q-ai-1794933754986-2",
+          "category": "Behavioral (STAR)",
+          "question": "Describe a time you encountered a complex bug in a project. How did you break down the problem to identify the root cause, and what steps did you take to prevent it from recurring?",
+          "expectedKeyPoints": [
+            "Clear problem decomposition strategy",
+            "Evidence of debugging tools used",
+            "Proactive measures such as testing or documentation updates"
+          ],
+          "suggestedDurationSeconds": 150,
+          "difficulty": "Easy"
+        }
+      ],
+      "currentQuestionIndex": 0,
+      "isAITask": true,
+      "taskFocus": "Object-Oriented Design & Scalability",
+      "rewardPoints": 10,
+      "createdAt": "2026-11-17T16:42:34.986Z"
+    },
+    {
+      "id": "int-ai-1794933718181-19",
+      "applicationId": "app-ai-task",
+      "candidateId": "cand-1794933701505",
+      "candidateName": "David Chen",
+      "candidateEmail": "david.chen@example.com",
+      "candidateHeadline": "Candidate",
+      "candidateAvatar": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
+      "jobId": "job-1",
+      "jobTitle": "AI Task: Data Structures, HashMaps & Time Complexity",
+      "companyName": "TalentPulse AI Coach",
+      "recruiterId": "rec-ai",
+      "type": "AI Technical",
+      "scheduledAt": "2026-11-17T16:41:58.181Z",
+      "durationMinutes": 25,
+      "difficulty": "Junior",
+      "topicCount": 3,
+      "status": "COMPLETED",
+      "meetingId": "ai-task-ehc3n39",
+      "questions": [
+        {
+          "id": "q-ai-1794933718181-0",
+          "category": "Technical",
+          "question": "Explain how a HashMap handles collisions internally and compare Separate Chaining vs Open Addressing in terms of cache locality and worst-case lookup complexity.",
+          "expectedKeyPoints": [
+            "Hash bucket indexing",
+            "Chaining vs probing trade-offs",
+            "O(1) average vs O(N) worst case"
+          ],
+          "suggestedDurationSeconds": 150,
+          "difficulty": "Medium"
+        },
+        {
+          "id": "q-ai-1794933718181-1",
+          "category": "Technical",
+          "question": "When would you choose a LinkedList or Queue over a dynamic contiguous Array, and why do modern CPUs often favor arrays?",
+          "expectedKeyPoints": [
+            "CPU cache locality",
+            "O(1) head/tail operations vs random access",
+            "Memory allocation overhead"
+          ],
+          "suggestedDurationSeconds": 120,
+          "difficulty": "Easy"
+        },
+        {
+          "id": "q-ai-1794933718181-2",
+          "category": "Behavioral (STAR)",
+          "question": "Tell me about a tough bug you encountered in a college or personal coding project. How did you isolate the root cause and verify your fix?",
+          "expectedKeyPoints": [
+            "Systematic debugging steps",
+            "Root cause analysis",
+            "Testing & verification"
+          ],
+          "suggestedDurationSeconds": 150,
+          "difficulty": "Easy"
+        }
+      ],
+      "currentQuestionIndex": 0,
+      "isAITask": true,
+      "taskFocus": "DSA & Core CS",
+      "rewardPoints": 10,
+      "createdAt": "2026-11-17T16:41:58.181Z"
+    },
+    {
       "id": "int-1",
       "applicationId": "app-1",
       "candidateId": "cand-1",
@@ -1266,6 +1480,84 @@
       "createdAt": "2026-02-22T10:00:00.000Z"
     }
   ],
-  "interviewResults": [],
-  "notifications": []
+  "interviewResults": [
+    {
+      "id": "res-1794933738190",
+      "interviewId": "int-ai-1794933718181-19",
+      "candidateId": "cand-1794933701505",
+      "candidateName": "David Chen",
+      "jobId": "job-1",
+      "jobTitle": "AI Task: Data Structures, HashMaps & Time Complexity",
+      "overallScore": 75,
+      "categoryScores": {
+        "technicalCorrectness": 77,
+        "communicationClarity": 80,
+        "problemSolvingSTAR": 74,
+        "completeness": 75,
+        "conceptCoverage": 72
+      },
+      "feedbackForCandidate": {
+        "strengths": [
+          "Clear, structured problem-solving approach using STAR principles",
+          "Strong awareness of production trade-offs and latency considerations",
+          "Effective communication with concise technical vocabulary"
+        ],
+        "growthAreas": [
+          "Deepen familiarity with zero-downtime database migration strategies",
+          "Elaborate more quantitatively on past business impact metrics"
+        ],
+        "recommendedResources": [
+          "Martin Kleppmann - Designing Data-Intensive Applications",
+          "WebRTC & Real-time Communications Deep Dive",
+          "System Design Primer & Distributed Caching patterns"
+        ],
+        "encouragingClosing": "Great demonstration of technical acumen and calm demeanor under interview conditions. Keep building on these strengths!"
+      },
+      "feedbackForRecruiter": {
+        "executiveSummary": "Candidate demonstrated solid domain competency and articulate communication throughout the interview session. Showed practical maturity in distributed system trade-offs.",
+        "verifiedSkillProficiency": [
+          "Full-Stack Architecture & API Design",
+          "Operational Post-Mortem & Blameless Culture",
+          "Asynchronous Communication & Concurrency"
+        ],
+        "verificationFlagsOrGaps": [
+          "Candidate touched lightly on multi-region failover; recommend brief technical drilldown in subsequent round"
+        ],
+        "recommendedFollowUpQuestions": [
+          "Ask how they have handled schema deprecations across distributed mobile/web clients",
+          "Inquire about specific metrics improved in their last major platform migration"
+        ],
+        "humanRecommendationAdvisory": "Meets Threshold with Verification"
+      },
+      "perQuestionEvals": [
+        {
+          "questionId": "q1",
+          "question": "Q1",
+          "transcript": "HashMap uses buckets and chaining.",
+          "durationSeconds": 30
+        }
+      ],
+      "transcriptFull": "Q1: Q1\nAnswer: HashMap uses buckets and chaining.\nEval: N/A",
+      "consentGiven": true,
+      "evaluatedAt": "2026-11-17T16:42:18.190Z",
+      "pointsAwarded": 10,
+      "totalPoints": 10,
+      "currentStreak": 1,
+      "longestStreak": 1,
+      "completedTasksCount": 1,
+      "streakIncreased": true
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notif-1794933761801-comp-cand",
+      "userId": "usr-cand-3",
+      "title": "Interview Completed (+10 Points!)",
+      "message": "Scored 75/100 on AI Task: Data Structures, HashMaps & Time Complexity. Earned +10 pts (Streak: 1d). A new AI Task Interview has been added!",
+      "type": "interview_completed",
+      "read": false,
+      "timestamp": "2026-11-17T16:42:41.801Z",
+      "linkTab": "candidate-dashboard"
+    }
+  ]
 }

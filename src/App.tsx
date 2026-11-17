@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   User,
   UserRole,
@@ -71,6 +71,8 @@ export default function App() {
   const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false);
   const [isSRSModalOpen, setIsSRSModalOpen] = useState<boolean>(false);
   const [loadingInitial, setLoadingInitial] = useState(true);
+  const [isGeneratingAITask, setIsGeneratingAITask] = useState(false);
+  const ensuringTaskRef = useRef(false);
 
   const loadWorkspaceData = async (
     explicitToken?: string,
@@ -254,67 +256,79 @@ export default function App() {
     }
   };
 
+  const handleGenerateAITask = async (focusArea?: string, openImmediately = false): Promise<Interview | null> => {
+    if (ensuringTaskRef.current) return null;
+    ensuringTaskRef.current = true;
+    setIsGeneratingAITask(true);
+    try {
+      const token = getAuthToken();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
+      const res = await fetch('/api/interviews/ai-task/generate', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(focusArea ? { focusArea } : {}),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.interview) {
+          setInterviews((prev) => {
+            const exists = prev.some((i) => i.id === data.interview.id);
+            return exists ? prev : [data.interview, ...prev];
+          });
+          if (openImmediately) {
+            setActiveInterviewRoom(data.interview);
+          }
+          return data.interview;
+        }
+      }
+    } catch (err) {
+      console.error('Error generating AI task interview:', err);
+    } finally {
+      ensuringTaskRef.current = false;
+      setIsGeneratingAITask(false);
+    }
+    return null;
+  };
+
+  const handleEnsureAITask = useCallback(async () => {
+    if (ensuringTaskRef.current) return;
+    ensuringTaskRef.current = true;
+    setIsGeneratingAITask(true);
+    try {
+      const token = getAuthToken();
+      const requestInit: RequestInit | undefined = token
+        ? { headers: { Authorization: `Bearer ${token}` } }
+        : undefined;
+      const res = await fetch('/api/interviews', requestInit);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.interviews)) {
+          setInterviews(data.interviews);
+        }
+      }
+    } catch (err) {
+      console.error('Error ensuring AI task interview:', err);
+    } finally {
+      ensuringTaskRef.current = false;
+      setIsGeneratingAITask(false);
+    }
+  }, []);
+
   // Quick Open Live Interview Room
-  const handleOpenInterviewQuick = () => {
+  const handleOpenInterviewQuick = async () => {
     const myInterviews = interviews.filter(
       (i) =>
         (candidateProfile && i.candidateId === candidateProfile.id) ||
         (currentUser?.email && i.candidateEmail?.toLowerCase() === currentUser.email.toLowerCase())
     );
-    if (myInterviews.length > 0) {
-      const scheduled = myInterviews.find((i) => i.status !== 'COMPLETED') || myInterviews[0];
+    const scheduled = myInterviews.find((i) => i.status !== 'COMPLETED' && i.status !== 'CANCELLED');
+    if (scheduled) {
       setActiveInterviewRoom(scheduled);
-    } else if (jobs.length > 0 && candidateProfile) {
-      // Create quick on-demand interview
-      const dummyInt: Interview = {
-        id: `int-${Date.now()}`,
-        applicationId: applications[0]?.id || 'app-1',
-        candidateId: candidateProfile.id,
-        candidateName: currentUser?.name || candidateProfile.parsedResumeData?.name || 'Candidate',
-        jobId: jobs[0].id,
-        jobTitle: jobs[0].title,
-        companyName: jobs[0].companyName,
-        recruiterId: 'rec-1',
-        type: 'AI Technical',
-        scheduledAt: new Date().toISOString(),
-        durationMinutes: 30,
-        difficulty: 'Senior',
-        topicCount: 4,
-        status: 'SCHEDULED',
-        meetingId: `meet-${Math.random().toString(36).substring(2, 9)}`,
-        questions: [
-          {
-            id: 'q-live-1',
-            category: 'System Architecture',
-            question:
-              'How do you design a high-throughput WebRTC signaling channel and handle fallback for peers behind restrictive symmetric NATs?',
-            difficulty: 'Hard',
-            expectedKeyPoints: [
-              'STUN/TURN relay mechanics (RFC 5766)',
-              'ICE candidate gathering and Trickle ICE',
-              'Signaling transport via WebSockets and fallback to HTTPS long-polling',
-            ],
-            suggestedDurationSeconds: 180,
-          },
-          {
-            id: 'q-live-2',
-            category: 'System Architecture',
-            question:
-              'When processing audio streams for live speech transcription, how do you prevent dropped packets and handle intermittent client connectivity?',
-            difficulty: 'Hard',
-            expectedKeyPoints: [
-              'Client-side buffer rings',
-              'Backpressure flow control',
-              'WebSocket reconnect logic with sequence acknowledgements',
-            ],
-            suggestedDurationSeconds: 180,
-          },
-        ],
-        currentQuestionIndex: 0,
-        createdAt: new Date().toISOString(),
-      };
-      setActiveInterviewRoom(dummyInt);
+      return;
     }
+    await handleGenerateAITask(undefined, true);
   };
 
   // View results modal
@@ -393,8 +407,13 @@ export default function App() {
     setIsOnboardingOpen(false);
   };
 
-  const handleStartTrackMockInterview = (track: 'fresher' | 'experienced', focusArea?: string) => {
+  const handleStartTrackMockInterview = async (track: 'fresher' | 'experienced', focusArea?: string) => {
     if (!candidateProfile) return;
+    const created = await handleGenerateAITask(
+      focusArea || (track === 'fresher' ? 'Fresher Readiness & Core CS' : 'Senior System Architecture'),
+      true
+    );
+    if (created) return;
     const isFresher = track === 'fresher';
 
     let questions: any[];
@@ -793,6 +812,9 @@ export default function App() {
                 onOpenATSModal={() => setIsATSModalOpen(true)}
                 onStartTrackMockInterview={handleStartTrackMockInterview}
                 onOpenOnboarding={() => setIsOnboardingOpen(true)}
+                onGenerateAITask={() => handleGenerateAITask(undefined, false)}
+                onEnsureAITask={handleEnsureAITask}
+                isGeneratingAITask={isGeneratingAITask}
               />
             )}
 
@@ -921,13 +943,25 @@ export default function App() {
           interview={activeInterviewRoom}
           profileUserName={currentUser.name}
           onClose={() => setActiveInterviewRoom(null)}
-          onInterviewCompleted={(result) => {
+          onInterviewCompleted={(result, payload) => {
             setActiveInterviewRoom(null);
             setActiveReportResult(result);
-            // Refresh interviews list
-            setInterviews((prev) =>
-              prev.map((i) => (i.id === result.interviewId ? { ...i, status: 'COMPLETED' } : i))
-            );
+            if (payload?.profile) {
+              setCandidateProfile(payload.profile);
+            }
+            setInterviews((prev) => {
+              const updated = prev.map((i) =>
+                i.id === result.interviewId ? { ...i, status: 'COMPLETED' as const } : i
+              );
+              if (payload?.nextInterview) {
+                const exists = updated.some((i) => i.id === payload.nextInterview!.id);
+                return exists ? updated : [payload.nextInterview!, ...updated];
+              }
+              return updated;
+            });
+            if (!payload?.nextInterview) {
+              handleEnsureAITask();
+            }
           }}
         />
       )}

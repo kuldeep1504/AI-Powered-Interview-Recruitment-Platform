@@ -14,6 +14,8 @@ import {
   ShieldCheck,
   ChevronDown,
   ChevronUp,
+  Flame,
+  Trophy,
 } from 'lucide-react';
 
 interface InterviewReportModalProps {
@@ -59,6 +61,30 @@ export const InterviewReportModal: React.FC<InterviewReportModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {typeof result.pointsAwarded === 'number' && result.pointsAwarded > 0 && (
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-50 via-emerald-50 to-teal-50 border border-amber-200/80 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <Trophy className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-xs font-extrabold text-neutral-900">
+                  +{result.pointsAwarded} Points Earned! New AI Task Interview Ready
+                </div>
+                <div className="text-[11px] text-neutral-600">
+                  Total Points: <strong>{result.totalPoints ?? result.pointsAwarded}</strong> • Tasks Completed:{' '}
+                  <strong>{result.completedTasksCount ?? 1}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white border border-amber-300 text-amber-800 text-xs font-bold shadow-2xs">
+              <Flame className="w-4 h-4 text-orange-500" />
+              <span>{result.currentStreak ?? 1} Day Streak</span>
+            </div>
+          </div>
+        )}
 
         {/* Score Card Banner */}
         <div className="p-6 rounded-2xl bg-neutral-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-md">
